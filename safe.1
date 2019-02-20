@@ -1,0 +1,21 @@
+.Dd 2019-02-20
+.Dt PM 1
+.Os POSIX.1-2008
+.Sh NAME
+.Nm safe
+.Nd Digital safe for your secrets
+.Sh SYNOPSIS
+.Nm
+.Op Fl h
+.Sh DESCRIPTION
+.Nm
+stores secrets (files) encrypted on your disk, and lets you retrieve them,
+given that you have the password.
+.Bl -tag -width Ds
+.It Fl h
+Print a quick usage text.
+.El
+.Sh SEE ALSO
+.Xr openssl 1 ,
+.Sh AUTHORS
+.An Willy Goiffon Aq Mt contact@z3bra.org

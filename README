@@ -1,0 +1,23 @@
+# safe
+
+Store your secrets in an encrypted safe, protected by a password.
+
+## usage
+
+	safe [-la] [secret..]
+
+	# add a secret to your safe
+	echo 'This is secret!' | safe -a secret
+
+	# retrieve a secret from your safe
+	safe secret
+
+## goals
+
++ Only require a master password to unlock
++ Provide a way to open/lock the safe (agent?)
++ Store any kind of file
++ Do not expose file hierarchy if locked
+
+## license
+This software is licensed under the ISC license, see the LICENSE file provided.
