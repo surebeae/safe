@@ -4,10 +4,16 @@ Store your secrets in an encrypted safe, protected by a password.
 
 ## usage
 
-	safe [-la] [secret..]
+	safe [-ad] [secret..]
+
+	# list all your deepest secrets
+	safe
 
 	# add a secret to your safe
 	echo 'This is secret!' | safe -a secret
+
+	# start a safe agent
+	safe -d
 
 	# retrieve a secret from your safe
 	safe secret
@@ -18,6 +24,40 @@ Store your secrets in an encrypted safe, protected by a password.
 + Provide a way to open/lock the safe (agent?)
 + Store any kind of file
 + Do not expose file hierarchy if locked
+
+## design
+
+Your safe is stored on disk as a directory tree, with the following structure:
+
+	.safe
+	.safe/.index
+	.safe/2a809d0bfb9e39c5abf2b8b5baee231043085d3172aaa0040317cffc02736d5e
+	.safe/ad2063741cce2d9f2862b07152b06528d175e9e658ade8f2daa416834c9c089a
+
+Where each hash represent a "secret". They're stored as hashes to hide
+any kind of meta information about your secret.
+These files are stored encrypted, using your master password.
+
+The .index file stores the actual names of your entries, so we can
+calculate the hash in-memory.
+This file is also stored encrypted.
+
+You can then retrieve secrets by requesting them, and typing your master
+password to decrypt them.
+
+To make it more usable, the safe is accessible through an agent (let's
+call it Edgard), which acts as a gatekeeper.
+When you want to retrieve a secret, you ask Edgard for it, and he will
+decrypt it for you on stdout.
+
+When you first call Edgard, he will ask you for your master password,
+so he can decrypt the secrets for you.
+
+The password is stored hashed in memory, so nobody can "retrieve" your
+master password. As this hash is kept in memory to decrypt the file,
+giving your password to Edgard means that an intruder could extract
+this hash, and thus decrypt your secrets.
+If you're concerned about this, then don't call Edgard.
 
 ## license
 This software is licensed under the ISC license, see the LICENSE file provided.
