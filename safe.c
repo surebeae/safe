@@ -80,7 +80,7 @@ xwrite(int fd, const void *buf, size_t nbytes)
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-h] [-s safe] [-p pass] [[-a] entry]\n", argv0);
 	exit(1);
 }
 
@@ -94,13 +94,49 @@ hash(uint8_t *buf, size_t size, uint8_t *md)
 	SHA256_Final(md, &ctx);
 }
 
+void
+hash_key(char *pass)
+{
+	size_t i;
+	uint8_t md[MDSIZE];
+	char key[MDSIZE * 2];
+
+	hash((uint8_t *)pass, strlen(pass), md);
+	bin2str(md, key, MDSIZE);
+
+	for (i = 0; i < sizeof(key); i++)
+		key[i] &= 1;
+
+	setkey(key);
+}
+
+void
+xencrypt(char *s, size_t size, int edflag)
+{
+	size_t i, j;
+	char buf[64];
+
+	if (size > 8)
+		xencrypt(s+8, size - 8, edflag);
+
+	for (i = 0; i < 8; i ++)
+		for (j = 0; j < 8; j++)
+			buf[i * 8 + j] = s[i] >> j & 1;
+
+	encrypt(buf, edflag);
+	for (i = 0; i < 8; i++)
+		for (j = 0; j < 8; j++)
+			s[i] |= buf[i * 8 + j] << j;
+
+}
+
 int
 store_secret(int fd, char *name)
 {
 	int sfd;
 	ssize_t n;
 	uint8_t md[MDSIZE];
-	char buf[4096], fn[MDSIZE*2 + 1];
+	char buf[64], fn[MDSIZE*2 + 1];
 
 	hash((uint8_t *)name, strlen(name), md);
 	bin2str(md, fn, MDSIZE);
@@ -109,8 +145,10 @@ store_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", fn);
 
-	while((n = xread(fd, buf, sizeof(buf))) > 0)
+	while((n = xread(fd, buf, sizeof(buf))) > 0) {
+		/* xencrypt(buf, sizeof(buf), 0); */
 		xwrite(sfd, buf, n);
+	}
 
 	close(sfd);
 	return 0;
@@ -122,7 +160,7 @@ show_secret(int fd, char *name)
 	int sfd;
 	ssize_t n;
 	uint8_t md[MDSIZE];
-	char buf[4096], fn[MDSIZE*2 + 1];
+	char buf[64], fn[MDSIZE*2 + 1];
 
 	hash((uint8_t *)name, strlen(name), md);
 	bin2str(md, fn, MDSIZE);
@@ -131,23 +169,27 @@ show_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", fn);
 
-	while((n = xread(sfd, buf, sizeof(buf))) > 0)
+	while((n = xread(sfd, buf, sizeof(buf))) > 0) {
+		/* xencrypt(buf, sizeof(buf), 1); */
 		xwrite(fd, buf, n);
+	}
 
 	close(sfd);
-	return 0;
 	return 0;
 }
 
 int
 main(int argc, char *argv[])
 {
-	int aflag;
-	char *secret = NULL, *safe = SAFE;
+	int aflag = 0;
+	char *secret = NULL, *pass = NULL, *safe = SAFE;
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
+		break;
+	case 'p':
+		pass = EARGF(usage());
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -156,18 +198,18 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	if (argc > 1)
+	if (argc != 1)
 		usage();
 
-	if (safe != NULL) {
+
+	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
 			err(1, "chdir: %s", safe);
 	}
 
-	if (!argc)
-		/* list all secrets and exit */
-		return 0;
+	if (pass)
+		hash_key(pass);
 
 	secret = argv[0];
 

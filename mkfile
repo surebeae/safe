@@ -4,10 +4,10 @@ LD = ${CC}
 PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/man
 
-CPPFLAGS =
+CPPFLAGS = -D_XOPEN_SOURCE
 CFLAGS = -g -Wall -Wextra -pedantic
 LDFLAGS =
-LDLIBS = -lcrypto
+LDLIBS = -lcrypto -lcrypt
 
 BIN = safe
 SRC = ${BIN}.c
