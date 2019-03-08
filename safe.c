@@ -95,7 +95,7 @@ hash(uint8_t *buf, size_t size, uint8_t *md)
 }
 
 int
-storepass(int fd, char *name)
+store_secret(int fd, char *name)
 {
 	int sfd;
 	ssize_t n;
@@ -117,7 +117,7 @@ storepass(int fd, char *name)
 }
 
 int
-showpass(int fd, char *name)
+show_secret(int fd, char *name)
 {
 	int sfd;
 	ssize_t n;
@@ -172,9 +172,9 @@ main(int argc, char *argv[])
 	secret = argv[0];
 
 	if (aflag) {
-		storepass(STDIN_FILENO, secret);
+		store_secret(STDIN_FILENO, secret);
 	} else {
-		showpass(STDOUT_FILENO, secret);
+		show_secret(STDOUT_FILENO, secret);
 	}
 
 	return 0;
