@@ -10,11 +10,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/sha.h>
+#include <sodium.h>
 
 #include "arg.h"
 
-#define MDSIZE 32
+#define MDSIZE crypto_generichash_BYTES
 #define SAFE ".safe.d"
 
 char *argv0;
@@ -85,13 +85,9 @@ usage(void)
 }
 
 void
-hash(uint8_t *buf, size_t size, uint8_t *md)
+hash(uint8_t *buf, size_t size, uint8_t *md, size_t mdsize)
 {
-	SHA256_CTX ctx;
-
-	SHA256_Init(&ctx);
-	SHA256_Update(&ctx, buf, size);
-	SHA256_Final(md, &ctx);
+	crypto_generichash(md, mdsize, buf, size, NULL, 0);
 }
 
 void
@@ -101,33 +97,11 @@ hash_key(char *pass)
 	uint8_t md[MDSIZE];
 	char key[MDSIZE * 2];
 
-	hash((uint8_t *)pass, strlen(pass), md);
+	hash((uint8_t *)pass, strlen(pass), md, sizeof(md));
 	bin2str(md, key, MDSIZE);
 
 	for (i = 0; i < sizeof(key); i++)
 		key[i] &= 1;
-
-	setkey(key);
-}
-
-void
-xencrypt(char *s, size_t size, int edflag)
-{
-	size_t i, j;
-	char buf[64];
-
-	if (size > 8)
-		xencrypt(s+8, size - 8, edflag);
-
-	for (i = 0; i < 8; i ++)
-		for (j = 0; j < 8; j++)
-			buf[i * 8 + j] = s[i] >> j & 1;
-
-	encrypt(buf, edflag);
-	for (i = 0; i < 8; i++)
-		for (j = 0; j < 8; j++)
-			s[i] |= buf[i * 8 + j] << j;
-
 }
 
 int
@@ -138,7 +112,7 @@ store_secret(int fd, char *name)
 	uint8_t md[MDSIZE];
 	char buf[64], fn[MDSIZE*2 + 1];
 
-	hash((uint8_t *)name, strlen(name), md);
+	hash((uint8_t *)name, strlen(name), md, sizeof(md));
 	bin2str(md, fn, MDSIZE);
 
 	sfd = open(fn, O_WRONLY | O_CREAT, 0600);
@@ -146,7 +120,6 @@ store_secret(int fd, char *name)
 		err(1, "open %s", fn);
 
 	while((n = xread(fd, buf, sizeof(buf))) > 0) {
-		/* xencrypt(buf, sizeof(buf), 0); */
 		xwrite(sfd, buf, n);
 	}
 
@@ -162,7 +135,7 @@ show_secret(int fd, char *name)
 	uint8_t md[MDSIZE];
 	char buf[64], fn[MDSIZE*2 + 1];
 
-	hash((uint8_t *)name, strlen(name), md);
+	hash((uint8_t *)name, strlen(name), md, sizeof(md));
 	bin2str(md, fn, MDSIZE);
 
 	sfd = open(fn, O_RDONLY);
@@ -207,6 +180,9 @@ main(int argc, char *argv[])
 		if (chdir(safe) < 0)
 			err(1, "chdir: %s", safe);
 	}
+
+	if (sodium_init() < 0)
+		err(1, "sodium: failed to initialize library");
 
 	if (pass)
 		hash_key(pass);

@@ -7,7 +7,7 @@ MANPREFIX = ${PREFIX}/man
 CPPFLAGS = -D_XOPEN_SOURCE
 CFLAGS = -g -Wall -Wextra -pedantic
 LDFLAGS =
-LDLIBS = -lcrypto -lcrypt
+LDLIBS = -lsodium
 
 BIN = safe
 SRC = ${BIN}.c
