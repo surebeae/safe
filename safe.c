@@ -13,11 +13,26 @@
 #include <sodium.h>
 
 #include "arg.h"
+#include "readpassphrase.h"
 
 #define MDSIZE crypto_generichash_BYTES
-#define SAFE ".safe.d"
+#define SAFE ".secrets"
+#define META ".meta"
+
+struct secret {
+	char hex[256];
+};
+
+struct safe {
+	uint8_t salt[crypto_pwhash_SALTBYTES];
+	struct secret *secrets;
+};
 
 char *argv0;
+
+uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+uint8_t *passphrase;
+uint32_t pplen;
 
 void
 str2bin(char *s, uint8_t *d, size_t size)
@@ -80,8 +95,29 @@ xwrite(int fd, const void *buf, size_t nbytes)
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-h] [-s safe] [-p pass] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
 	exit(1);
+}
+
+static int
+readpass(const char *prompt, uint8_t **target, uint32_t *len)
+{
+	char pass[BUFSIZ], *p;
+
+	p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF);
+	if (!p)
+		err(1, "readpassphrase:");
+
+	if (p[0] == '\0')
+		return -1;
+
+	*target = realloc(*target, strlen(p)); /* not null-terminated */
+	if (!*target)
+		err(1, "realloc:");
+
+	memcpy(*target, p, strlen(p));
+	*len = strlen(p);
+	return 0;
 }
 
 void
@@ -91,21 +127,17 @@ hash(uint8_t *buf, size_t size, uint8_t *md, size_t mdsize)
 }
 
 void
-hash_key(char *pass)
+deriv(char *pw, struct safe *s)
 {
-	size_t i;
-	uint8_t md[MDSIZE];
-	char key[MDSIZE * 2];
-
-	hash((uint8_t *)pass, strlen(pass), md, sizeof(md));
-	bin2str(md, key, MDSIZE);
-
-	for (i = 0; i < sizeof(key); i++)
-		key[i] &= 1;
+	if (crypto_pwhash(key, sizeof(key), pw, strlen(pw),
+			s->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
+			crypto_pwhash_MEMLIMIT_INTERACTIVE,
+			crypto_pwhash_ALG_DEFAULT))
+		err(1, "crypto_pwhash");
 }
 
 int
-store_secret(int fd, char *name)
+store_secret(struct safe *s, int fd, char *name)
 {
 	int sfd;
 	ssize_t n;
@@ -128,7 +160,7 @@ store_secret(int fd, char *name)
 }
 
 int
-show_secret(int fd, char *name)
+show_secret(struct safe *s, int fd, char *name)
 {
 	int sfd;
 	ssize_t n;
@@ -151,18 +183,40 @@ show_secret(int fd, char *name)
 	return 0;
 }
 
+void
+init(struct safe *s)
+{
+	struct stat sb;
+	if (sodium_init() < 0)
+		err(1, "sodium: failed to initialize library");
+
+	if (stat(META, &sb)) {
+		randombytes_buf(s->salt, sizeof(s->salt));
+		s->secrets = NULL;
+	}
+}
+
+void
+deinit(struct safe *s)
+{
+	int fd;
+
+	fd = open(META, O_RDWR | O_CREAT | O_EXCL, 0600);
+	write(fd, s, sizeof(*s));
+	fsync(fd);
+	close(fd);
+}
+
 int
 main(int argc, char *argv[])
 {
 	int aflag = 0;
-	char *secret = NULL, *pass = NULL, *safe = SAFE;
+	char *secret = NULL, *safe = SAFE;
+	struct safe s;
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
-		break;
-	case 'p':
-		pass = EARGF(usage());
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -174,25 +228,23 @@ main(int argc, char *argv[])
 	if (argc != 1)
 		usage();
 
-
 	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
 			err(1, "chdir: %s", safe);
 	}
 
-	if (sodium_init() < 0)
-		err(1, "sodium: failed to initialize library");
+	init(&s);
 
-	if (pass)
-		hash_key(pass);
+	readpass("Passphrase:", &passphrase, &pplen);
+	deriv((char *)passphrase, &s);
 
 	secret = argv[0];
 
 	if (aflag) {
-		store_secret(STDIN_FILENO, secret);
+		store_secret(&s, STDIN_FILENO, secret);
 	} else {
-		show_secret(STDOUT_FILENO, secret);
+		show_secret(&s, STDOUT_FILENO, secret);
 	}
 
 	return 0;

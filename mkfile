@@ -10,7 +10,7 @@ LDFLAGS =
 LDLIBS = -lsodium
 
 BIN = safe
-SRC = ${BIN}.c
+SRC = ${BIN}.c readpassphrase.c
 OBJ = ${SRC:%.c=%.o}
 
 ${BIN}: $OBJ
