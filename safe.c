@@ -13,6 +13,7 @@
 #include <sodium.h>
 
 #include "arg.h"
+#include "queue.h"
 #include "readpassphrase.h"
 
 #define MDSIZE crypto_generichash_BYTES
@@ -20,12 +21,15 @@
 #define META ".meta"
 
 struct secret {
-	char hex[256];
+	char name[64];
+	char hex[MDSIZE*2 + 1];
+	SLIST_ENTRY(secret) entry;
 };
 
 struct safe {
 	uint8_t salt[crypto_pwhash_SALTBYTES];
-	struct secret *secrets;
+	uint32_t nentry;
+	SLIST_HEAD(secrets, secret) secrets;
 };
 
 char *argv0;
@@ -143,11 +147,15 @@ store_secret(struct safe *s, int fd, char *name)
 	ssize_t n;
 	uint8_t md[MDSIZE];
 	char buf[64], fn[MDSIZE*2 + 1];
+	struct secret *secret;
+
+	secret = malloc(sizeof(*secret));
+	strcpy(secret->name, name);
 
 	hash((uint8_t *)name, strlen(name), md, sizeof(md));
-	bin2str(md, fn, MDSIZE);
+	bin2str(md, secret->hex, MDSIZE);
 
-	sfd = open(fn, O_WRONLY | O_CREAT, 0600);
+	sfd = open(secret->hex, O_WRONLY | O_CREAT, 0600);
 	if (sfd < 0)
 		err(1, "open %s", fn);
 
@@ -156,6 +164,10 @@ store_secret(struct safe *s, int fd, char *name)
 	}
 
 	close(sfd);
+
+	SLIST_INSERT_HEAD(&s->secrets, secret, entry);
+	s->nentry++;
+
 	return 0;
 }
 
@@ -175,7 +187,6 @@ show_secret(struct safe *s, int fd, char *name)
 		err(1, "open %s", fn);
 
 	while((n = xread(sfd, buf, sizeof(buf))) > 0) {
-		/* xencrypt(buf, sizeof(buf), 1); */
 		xwrite(fd, buf, n);
 	}
 
@@ -186,13 +197,32 @@ show_secret(struct safe *s, int fd, char *name)
 void
 init(struct safe *s)
 {
+	int fd;
+	uint32_t i;
 	struct stat sb;
+	struct secret *secret;
+
 	if (sodium_init() < 0)
 		err(1, "sodium: failed to initialize library");
 
-	if (stat(META, &sb)) {
+	SLIST_INIT(&s->secrets);
+
+	if (!stat(META, &sb)) {
+		fd = open(META, O_RDONLY);
+
+		xread(fd, s->salt, sizeof(s->salt));
+		xread(fd, &s->nentry, sizeof(s->nentry));
+		for (i = 0; i < s->nentry; i++) {
+			secret = malloc(sizeof(*secret));
+			xread(fd, secret->name, sizeof(secret->name));
+			xread(fd, secret->hex, sizeof(secret->hex));
+			SLIST_INSERT_HEAD(&s->secrets, secret, entry);
+		}
+
+		close(fd);
+	} else {
+		s->nentry = 0;
 		randombytes_buf(s->salt, sizeof(s->salt));
-		s->secrets = NULL;
 	}
 }
 
@@ -200,9 +230,17 @@ void
 deinit(struct safe *s)
 {
 	int fd;
+	struct secret *tmp;
 
-	fd = open(META, O_RDWR | O_CREAT | O_EXCL, 0600);
-	write(fd, s, sizeof(*s));
+	fd = open(META, O_WRONLY | O_CREAT, 0600);
+
+	xwrite(fd, s->salt, sizeof(s->salt));
+	xwrite(fd, &s->nentry, sizeof(s->nentry));
+	SLIST_FOREACH(tmp, &s->secrets, entry) {
+		xwrite(fd, tmp->name, sizeof(tmp->name));
+		xwrite(fd, tmp->hex, sizeof(tmp->hex));
+	}
+
 	fsync(fd);
 	close(fd);
 }
@@ -243,9 +281,11 @@ main(int argc, char *argv[])
 
 	if (aflag) {
 		store_secret(&s, STDIN_FILENO, secret);
+		deinit(&s);
 	} else {
 		show_secret(&s, STDOUT_FILENO, secret);
 	}
 
 	return 0;
 }
+
