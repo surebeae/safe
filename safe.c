@@ -140,6 +140,14 @@ deriv(char *pw, struct safe *s)
 		err(1, "crypto_pwhash");
 }
 
+void
+list_secrets(struct safe *s)
+{
+	struct secret *tmp;
+	SLIST_FOREACH(tmp, &s->secrets, entry)
+		printf("%s\t%s\n", tmp->hex, tmp->name);
+}
+
 int
 store_secret(struct safe *s, int fd, char *name)
 {
@@ -248,13 +256,16 @@ deinit(struct safe *s)
 int
 main(int argc, char *argv[])
 {
-	int aflag = 0;
+	int aflag = 0, lflag = 0;
 	char *secret = NULL, *safe = SAFE;
 	struct safe s;
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
+		break;
+	case 'l':
+		lflag = 1;
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -263,7 +274,7 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	if (argc != 1)
+	if (argc != 1 && !lflag)
 		usage();
 
 	if (safe) {
@@ -279,7 +290,10 @@ main(int argc, char *argv[])
 
 	secret = argv[0];
 
-	if (aflag) {
+	if (lflag) {
+		list_secrets(&s);
+		return 0;
+	} else if (aflag) {
 		store_secret(&s, STDIN_FILENO, secret);
 		deinit(&s);
 	} else {
