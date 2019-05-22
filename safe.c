@@ -35,6 +35,13 @@ uint8_t *passphrase;
 uint32_t pplen;
 
 void
+usage(void)
+{
+	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
+	exit(1);
+}
+
+void
 str2bin(char *s, uint8_t *d, size_t size)
 {
 	size_t i;
@@ -90,13 +97,6 @@ xwrite(int fd, const void *buf, size_t nbytes)
 		nbytes -= n;
 	}
 	return total;
-}
-
-void
-usage(void)
-{
-	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
-	exit(1);
 }
 
 static int
