@@ -13,7 +13,6 @@
 #include <sodium.h>
 
 #include "arg.h"
-#include "queue.h"
 #include "readpassphrase.h"
 
 #define CKSIZE 4096
@@ -30,24 +29,6 @@ usage(void)
 {
 	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
 	exit(1);
-}
-
-void
-str2bin(char *s, uint8_t *d, size_t size)
-{
-	size_t i;
-
-	for (i = 0; i < size; i++, s += 2)
-		sscanf(s, "%2hhx", &d[i]);
-}
-
-void
-bin2str(uint8_t *d, char *s, size_t size)
-{
-	size_t i;
-
-	for (i = 0; i < size; i++, s += 2)
-		sprintf(s, "%02x", d[i]);
 }
 
 char *
@@ -145,12 +126,6 @@ readpass(const char *prompt, uint8_t **target, uint32_t *len)
 	memcpy(*target, p, strlen(p));
 	*len = strlen(p);
 	return 0;
-}
-
-void
-hash(uint8_t *buf, size_t size, uint8_t *md, size_t mdsize)
-{
-	crypto_generichash(md, mdsize, buf, size, NULL, 0);
 }
 
 void
