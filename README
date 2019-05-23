@@ -7,40 +7,34 @@ Store your secrets in an encrypted safe, protected by a password.
 	safe [-ad] [secret..]
 
 	# list all your deepest secrets
-	safe
+	find .secrets -type f
 
 	# add a secret to your safe
-	echo 'This is secret!' | safe -a secret
+	safe -a my/deepest/secret < cute-kitten.gif
 
 	# start a safe agent
 	safe -d
 
 	# retrieve a secret from your safe
-	safe secret
+	safe my/deepest/secret
 
 ## goals
 
 + Only require a master password to unlock
 + Provide a way to open/lock the safe (agent?)
 + Store any kind of file
-+ Do not expose file hierarchy if locked
++ Do not expose file hierarchy if locked (really?)
 
 ## design
 
 Your safe is stored on disk as a directory tree, with the following structure:
 
-	.safe
-	.safe/.index
-	.safe/2a809d0bfb9e39c5abf2b8b5baee231043085d3172aaa0040317cffc02736d5e
-	.safe/ad2063741cce2d9f2862b07152b06528d175e9e658ade8f2daa416834c9c089a
+	.secrets
+	.secrets/webmail
+	.secrets/work/webmail
+	.secrets/work/master
 
-Where each hash represent a "secret". They're stored as hashes to hide
-any kind of meta information about your secret.
-These files are stored encrypted, using your master password.
-
-The .index file stores the actual names of your entries, so we can
-calculate the hash in-memory.
-This file is also stored encrypted.
+Where each file represent a "secret".
 
 You can then retrieve secrets by requesting them, and typing your master
 password to decrypt them.
@@ -53,11 +47,11 @@ decrypt it for you on stdout.
 When you first call Edgard, he will ask you for your master password,
 so he can decrypt the secrets for you.
 
-The password is stored hashed in memory, so nobody can "retrieve" your
-master password. As this hash is kept in memory to decrypt the file,
-giving your password to Edgard means that an intruder could extract
-this hash, and thus decrypt your secrets.
-If you're concerned about this, then don't call Edgard.
+The master password is used to derivate an encryption key, and then
+zeroed in memory, to prevent anyone from retrieving it.
+As this key is kept in memory to decrypt the file, using Edgard means
+that an intruder could extract this key, and still decrypt your
+secrets. If you're concerned about this, don't call Edgard.
 
 ## license
 This software is licensed under the ISC license, see the LICENSE file provided.
