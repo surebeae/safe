@@ -50,6 +50,42 @@ bin2str(uint8_t *d, char *s, size_t size)
 		sprintf(s, "%02x", d[i]);
 }
 
+char *
+dirname(char *path)
+{
+	static char tmp[PATH_MAX];
+	char *p = NULL;
+	size_t len;
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	len = strlen(tmp);
+	for(p = tmp + len; p > tmp; p--)
+		if(*p == '/')
+			break;
+
+	*p = 0;
+	return tmp;
+}
+
+int
+mkdir_p(char *path, mode_t mode)
+{
+	char tmp[PATH_MAX] = "";
+	char *p = NULL;
+	size_t len;
+
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	len = strlen(tmp);
+	if(len && tmp[len - 1] == '/')
+		tmp[len - 1] = 0;
+	for(p = tmp + 1; *p; p++)
+		if(*p == '/') {
+			*p = 0;
+			mkdir(tmp, mode);
+			*p = '/';
+		}
+	return mkdir(tmp, mode);
+}
+
 ssize_t
 xread(int fd, void *buf, size_t nbytes)
 {
@@ -186,6 +222,7 @@ store_secret(int fd, char *name)
 	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 	uint8_t salt[crypto_pwhash_SALTBYTES];
 
+	mkdir_p(dirname(name), 0700);
 	sfd = open(name, O_WRONLY | O_CREAT, 0600);
 	if (sfd < 0)
 		err(1, "open %s", name);
