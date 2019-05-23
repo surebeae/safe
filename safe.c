@@ -22,7 +22,6 @@
 
 char *argv0;
 
-uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 uint8_t *passphrase;
 uint32_t pplen;
 
@@ -119,12 +118,12 @@ hash(uint8_t *buf, size_t size, uint8_t *md, size_t mdsize)
 }
 
 void
-deriv(char *pw)
+deriv(char *pw, uint8_t *key, size_t ks)
 {
 	uint8_t salt[crypto_pwhash_SALTBYTES];
 
 	sodium_memzero(salt, sizeof(salt));
-	if (crypto_pwhash(key, sizeof(key), pw, strlen(pw),
+	if (crypto_pwhash(key, ks, pw, strlen(pw),
 			salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
 			crypto_pwhash_MEMLIMIT_INTERACTIVE,
 			crypto_pwhash_ALG_DEFAULT))
@@ -132,7 +131,7 @@ deriv(char *pw)
 }
 
 void
-xencrypt(int ifd, int ofd)
+xencrypt(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
 	uint8_t in[CKSIZE];
@@ -160,7 +159,7 @@ xencrypt(int ifd, int ofd)
 }
 
 void
-xdecrypt(int ifd, int ofd)
+xdecrypt(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
 	uint8_t out[CKSIZE];
@@ -187,15 +186,16 @@ int
 store_secret(int fd, char *name)
 {
 	int sfd;
+	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 
 	sfd = open(name, O_WRONLY | O_CREAT, 0600);
 	if (sfd < 0)
 		err(1, "open %s", name);
 
 	readpass("Passphrase:", &passphrase, &pplen);
-	deriv((char *)passphrase);
+	deriv((char *)passphrase, key, sizeof(key));
 
-	xencrypt(fd, sfd);
+	xencrypt(fd, sfd, key);
 	close(sfd);
 
 	return 0;
@@ -205,15 +205,16 @@ int
 show_secret(int fd, char *name)
 {
 	int sfd;
+	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 
 	sfd = open(name, O_RDONLY);
 	if (sfd < 0)
 		err(1, "open %s", name);
 
 	readpass("Passphrase:", &passphrase, &pplen);
-	deriv((char *)passphrase);
+	deriv((char *)passphrase, key, sizeof(key));
 
-	xdecrypt(sfd, fd);
+	xdecrypt(sfd, fd, key);
 	close(sfd);
 
 	return 0;
