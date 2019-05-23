@@ -1,5 +1,7 @@
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 
 #include <err.h>
 #include <fcntl.h>
@@ -13,16 +15,11 @@
 #include <sodium.h>
 
 #include "arg.h"
-#include "readpassphrase.h"
 
-#define CKSIZE 4096
-#define MDSIZE crypto_generichash_BYTES
+#define SOCKET "/tmp/safe.sock"
 #define SAFE ".secrets"
 
 char *argv0;
-
-uint8_t *passphrase;
-uint32_t pplen;
 
 void
 usage(void)
@@ -107,43 +104,12 @@ xwrite(int fd, const void *buf, size_t nbytes)
 	return total;
 }
 
-static int
-readpass(const char *prompt, uint8_t **target, uint32_t *len)
-{
-	char pass[BUFSIZ], *p;
-
-	p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF);
-	if (!p)
-		err(1, "readpassphrase:");
-
-	if (p[0] == '\0')
-		return -1;
-
-	*target = realloc(*target, strlen(p)); /* not null-terminated */
-	if (!*target)
-		err(1, "realloc:");
-
-	memcpy(*target, p, strlen(p));
-	*len = strlen(p);
-	return 0;
-}
-
-void
-deriv(char *pw, uint8_t *salt, uint8_t *key, size_t ks)
-{
-	if (crypto_pwhash(key, ks, pw, strlen(pw),
-			salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
-			crypto_pwhash_MEMLIMIT_INTERACTIVE,
-			crypto_pwhash_ALG_DEFAULT))
-		err(1, "crypto_pwhash");
-}
-
 void
 xencrypt(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
-	uint8_t in[CKSIZE];
-	uint8_t out[CKSIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t in[BUFSIZ];
+	uint8_t out[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long len;
@@ -170,8 +136,8 @@ void
 xdecrypt(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
-	uint8_t out[CKSIZE];
-	uint8_t in[CKSIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t out[BUFSIZ];
+	uint8_t in[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long len;
@@ -191,6 +157,28 @@ xdecrypt(int ifd, int ofd, uint8_t *key)
 }
 
 int
+getkey(char *path, uint8_t *key, uint8_t *salt)
+{
+	int sfd;
+	struct sockaddr_un addr;
+
+	addr.sun_family = AF_UNIX;
+	strcpy(addr.sun_path, path);
+
+	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sfd < 0)
+		err(1, "socket %s", path);
+
+	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+		err(1, "connect %s", path);
+
+	xwrite(sfd, salt, crypto_pwhash_SALTBYTES);
+	xread(sfd, key, crypto_secretstream_xchacha20poly1305_KEYBYTES);
+
+	return 0;
+}
+
+int
 store_secret(int fd, char *name)
 {
 	int sfd;
@@ -205,8 +193,7 @@ store_secret(int fd, char *name)
 	randombytes_buf(salt, sizeof(salt));
 	xwrite(sfd, salt, sizeof(salt));
 
-	readpass("Passphrase:", &passphrase, &pplen);
-	deriv((char *)passphrase, salt, key, sizeof(key));
+	getkey(SOCKET, key, salt);
 
 	xencrypt(fd, sfd, key);
 	close(sfd);
@@ -227,8 +214,7 @@ show_secret(int fd, char *name)
 
 	xread(sfd, salt, sizeof(salt));
 
-	readpass("Passphrase:", &passphrase, &pplen);
-	deriv((char *)passphrase, salt, key, sizeof(key));
+	getkey(SOCKET, key, salt);
 
 	xdecrypt(sfd, fd, key);
 	close(sfd);
