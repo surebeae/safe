@@ -16,21 +16,9 @@
 #include "queue.h"
 #include "readpassphrase.h"
 
+#define CKSIZE 4096
 #define MDSIZE crypto_generichash_BYTES
 #define SAFE ".secrets"
-#define META ".meta"
-
-struct secret {
-	char name[64];
-	char hex[MDSIZE*2 + 1];
-	SLIST_ENTRY(secret) entry;
-};
-
-struct safe {
-	uint8_t salt[crypto_pwhash_SALTBYTES];
-	uint32_t nentry;
-	SLIST_HEAD(secrets, secret) secrets;
-};
 
 char *argv0;
 
@@ -131,126 +119,104 @@ hash(uint8_t *buf, size_t size, uint8_t *md, size_t mdsize)
 }
 
 void
-deriv(char *pw, struct safe *s)
+deriv(char *pw)
 {
+	uint8_t salt[crypto_pwhash_SALTBYTES];
+
+	sodium_memzero(salt, sizeof(salt));
 	if (crypto_pwhash(key, sizeof(key), pw, strlen(pw),
-			s->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
+			salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
 			crypto_pwhash_MEMLIMIT_INTERACTIVE,
 			crypto_pwhash_ALG_DEFAULT))
 		err(1, "crypto_pwhash");
 }
 
 void
-list_secrets(struct safe *s)
+xencrypt(int ifd, int ofd)
 {
-	struct secret *tmp;
-	SLIST_FOREACH(tmp, &s->secrets, entry)
-		printf("%s\t%s\n", tmp->hex, tmp->name);
+	ssize_t n;
+	uint8_t in[CKSIZE];
+	uint8_t out[CKSIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
+	unsigned long long len;
+
+	crypto_secretstream_xchacha20poly1305_init_push(&st, hdr, key);
+	xwrite(ofd, hdr, sizeof(hdr));
+
+	while ((n = xread(ifd, in, sizeof(in))) > 0) {
+		if ((size_t) n < sizeof(in))
+			break;
+
+		crypto_secretstream_xchacha20poly1305_push(&st, out, &len, in, n, NULL, 0, 0);
+		xwrite(ofd, out, len);
+	}
+
+	if (n < 0)
+		err(1, "xencrypt");
+
+	crypto_secretstream_xchacha20poly1305_push(&st, out, &len, in, n, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL);
+	xwrite(ofd, out, len);
+}
+
+void
+xdecrypt(int ifd, int ofd)
+{
+	ssize_t n;
+	uint8_t out[CKSIZE];
+	uint8_t in[CKSIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
+	unsigned long long len;
+
+	xread(ifd, hdr, sizeof(hdr));
+	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, hdr, key)) {
+		fprintf(stderr, "decrypt: incomplete header\n");
+		exit(1);
+	}
+
+	while ((n = xread(ifd, in, sizeof(in))) > 0) {
+		crypto_secretstream_xchacha20poly1305_pull(&st, out,
+		                                           &len, NULL, in, n,
+		                                           NULL, 0);
+		xwrite(ofd, out, len);
+	}
 }
 
 int
-store_secret(struct safe *s, int fd, char *name)
+store_secret(int fd, char *name)
 {
 	int sfd;
-	ssize_t n;
-	uint8_t md[MDSIZE];
-	char buf[64], fn[MDSIZE*2 + 1];
-	struct secret *secret;
 
-	secret = malloc(sizeof(*secret));
-	strcpy(secret->name, name);
-
-	hash((uint8_t *)name, strlen(name), md, sizeof(md));
-	bin2str(md, secret->hex, MDSIZE);
-
-	sfd = open(secret->hex, O_WRONLY | O_CREAT, 0600);
+	sfd = open(name, O_WRONLY | O_CREAT, 0600);
 	if (sfd < 0)
-		err(1, "open %s", fn);
+		err(1, "open %s", name);
 
-	while((n = xread(fd, buf, sizeof(buf))) > 0) {
-		xwrite(sfd, buf, n);
-	}
+	readpass("Passphrase:", &passphrase, &pplen);
+	deriv((char *)passphrase);
 
+	xencrypt(fd, sfd);
 	close(sfd);
-
-	SLIST_INSERT_HEAD(&s->secrets, secret, entry);
-	s->nentry++;
 
 	return 0;
 }
 
 int
-show_secret(struct safe *s, int fd, char *name)
+show_secret(int fd, char *name)
 {
 	int sfd;
-	ssize_t n;
-	uint8_t md[MDSIZE];
-	char buf[64], fn[MDSIZE*2 + 1];
 
-	hash((uint8_t *)name, strlen(name), md, sizeof(md));
-	bin2str(md, fn, MDSIZE);
-
-	sfd = open(fn, O_RDONLY);
+	sfd = open(name, O_RDONLY);
 	if (sfd < 0)
-		err(1, "open %s", fn);
+		err(1, "open %s", name);
 
-	while((n = xread(sfd, buf, sizeof(buf))) > 0) {
-		xwrite(fd, buf, n);
-	}
+	readpass("Passphrase:", &passphrase, &pplen);
+	deriv((char *)passphrase);
 
+	xdecrypt(sfd, fd);
 	close(sfd);
+
 	return 0;
-}
-
-void
-init(struct safe *s)
-{
-	int fd;
-	uint32_t i;
-	struct stat sb;
-	struct secret *secret;
-
-	if (sodium_init() < 0)
-		err(1, "sodium: failed to initialize library");
-
-	SLIST_INIT(&s->secrets);
-
-	if (!stat(META, &sb)) {
-		fd = open(META, O_RDONLY);
-
-		xread(fd, s->salt, sizeof(s->salt));
-		xread(fd, &s->nentry, sizeof(s->nentry));
-		for (i = 0; i < s->nentry; i++) {
-			secret = malloc(sizeof(*secret));
-			xread(fd, secret->name, sizeof(secret->name));
-			xread(fd, secret->hex, sizeof(secret->hex));
-			SLIST_INSERT_HEAD(&s->secrets, secret, entry);
-		}
-
-		close(fd);
-	} else {
-		s->nentry = 0;
-		randombytes_buf(s->salt, sizeof(s->salt));
-	}
-}
-
-void
-deinit(struct safe *s)
-{
-	int fd;
-	struct secret *tmp;
-
-	fd = open(META, O_WRONLY | O_CREAT, 0600);
-
-	xwrite(fd, s->salt, sizeof(s->salt));
-	xwrite(fd, &s->nentry, sizeof(s->nentry));
-	SLIST_FOREACH(tmp, &s->secrets, entry) {
-		xwrite(fd, tmp->name, sizeof(tmp->name));
-		xwrite(fd, tmp->hex, sizeof(tmp->hex));
-	}
-
-	fsync(fd);
-	close(fd);
 }
 
 int
@@ -258,14 +224,10 @@ main(int argc, char *argv[])
 {
 	int aflag = 0, lflag = 0;
 	char *secret = NULL, *safe = SAFE;
-	struct safe s;
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
-		break;
-	case 'l':
-		lflag = 1;
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -283,23 +245,13 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	init(&s);
-
-	readpass("Passphrase:", &passphrase, &pplen);
-	deriv((char *)passphrase, &s);
-
 	secret = argv[0];
 
-	if (lflag) {
-		list_secrets(&s);
-		return 0;
-	} else if (aflag) {
-		store_secret(&s, STDIN_FILENO, secret);
-		deinit(&s);
+	if (aflag) {
+		store_secret(STDIN_FILENO, secret);
 	} else {
-		show_secret(&s, STDOUT_FILENO, secret);
+		show_secret(STDOUT_FILENO, secret);
 	}
 
 	return 0;
 }
-
