@@ -4,7 +4,7 @@ Store your secrets in an encrypted safe, protected by a password.
 
 ## usage
 
-	safe [-ad] [secret..]
+	safe [-ad] [-f socket] [secret..]
 
 	# list all your deepest secrets
 	find .secrets -type f
@@ -47,11 +47,10 @@ decrypt it for you on stdout.
 When you first call Edgard, he will ask you for your master password,
 so he can decrypt the secrets for you.
 
-The master password is used to derivate an encryption key, and then
-zeroed in memory, to prevent anyone from retrieving it.
-As this key is kept in memory to decrypt the file, using Edgard means
-that an intruder could extract this key, and still decrypt your
-secrets. If you're concerned about this, don't call Edgard.
+As the password must be kept in memory to derivate the key, using
+Edgard means that an intruder could extract this password from memory
+and use it to decrypt secrets. If you're concerned about this, don't
+call Edgard.
 
 ## license
 This software is licensed under the ISC license, see the LICENSE file provided.
