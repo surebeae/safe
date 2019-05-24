@@ -15,10 +15,13 @@
 #include <sodium.h>
 
 #include "arg.h"
+#include "readpassphrase.h"
 
-#define SOCKET "/tmp/safe.sock"
+#define MDSIZ crypto_generichash_BYTES
 #define SAFE ".secrets"
 
+uint8_t *passphrase;
+size_t pplen;
 char *argv0;
 
 void
@@ -157,6 +160,38 @@ xdecrypt(int ifd, int ofd, uint8_t *key)
 }
 
 int
+readpass(const char *prompt, uint8_t **target, size_t *len)
+{
+	char pass[BUFSIZ], *p;
+
+	p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF);
+	if (!p)
+		err(1, "readpassphrase:");
+
+	if (p[0] == '\0')
+		return -1;
+
+	*target = realloc(*target, strlen(p)); /* not null-terminated */
+	if (!*target)
+		err(1, "realloc:");
+
+	memcpy(*target, p, strlen(p));
+	*len = strlen(p);
+
+	return 0;
+}
+
+void
+deriv(char *pw, uint8_t *salt, uint8_t *key, size_t ks)
+{
+	if (crypto_pwhash(key, ks, pw, strlen(pw),
+			salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
+			crypto_pwhash_MEMLIMIT_INTERACTIVE,
+			crypto_pwhash_ALG_DEFAULT))
+		err(1, "crypto_pwhash");
+}
+
+int
 getkey(char *path, uint8_t *key, uint8_t *salt)
 {
 	int sfd;
@@ -179,6 +214,15 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 }
 
 int
+genkey(uint8_t *key, size_t ks, uint8_t *salt)
+{
+	readpass("password:", &passphrase, &pplen);
+	deriv((char *)passphrase, salt, key, ks);
+
+	return 0;
+}
+
+int
 store_secret(int fd, char *name)
 {
 	int sfd;
@@ -193,7 +237,7 @@ store_secret(int fd, char *name)
 	randombytes_buf(salt, sizeof(salt));
 	xwrite(sfd, salt, sizeof(salt));
 
-	getkey(SOCKET, key, salt);
+	genkey(key, sizeof(key), salt);
 
 	xencrypt(fd, sfd, key);
 	close(sfd);
@@ -214,7 +258,7 @@ show_secret(int fd, char *name)
 
 	xread(sfd, salt, sizeof(salt));
 
-	getkey(SOCKET, key, salt);
+	genkey(key, sizeof(key), salt);
 
 	xdecrypt(sfd, fd, key);
 	close(sfd);
