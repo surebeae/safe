@@ -4,33 +4,28 @@ LD = ${CC}
 PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/man
 
-CPPFLAGS = -D_XOPEN_SOURCE
+CPPFLAGS = -I/usr/local/include
 CFLAGS = -g -Wall -Wextra -pedantic
-LDFLAGS =
+LDFLAGS = -L/usr/local/lib
 LDLIBS = -lsodium
 
-all:V: safe safe-agent
-
-safe-agent: safe-agent.o readpassphrase.o
-	$LD -o $target $prereq $LDFLAGS $LDLIBS
-
-safe: safe.o
+safe: safe.o readpassphrase.o
 	$LD -o $target $prereq $LDFLAGS $LDLIBS
 
 %.o: %.c
 	$CC $CPPFLAGS $CFLAGS -c $stem.c
 
 clean:V:
-	rm -f *.o safe safe-agent
+	rm -f *.o safe
 
-install:V: ${BIN}
+install:V: safe
 	mkdir -p ${DESTDIR}${PREFIX}/bin
-	cp ${BIN} ${DESTDIR}${PREFIX}/bin/${BIN}
-	chmod 755 ${DESTDIR}${PREFIX}/bin/${BIN}
+	cp safe ${DESTDIR}${PREFIX}/bin/safe
+	chmod 755 ${DESTDIR}${PREFIX}/bin/safe
 	mkdir -p ${DESTDIR}${MANPREFIX}/man1
-	cp ${BIN}.1 ${DESTDIR}${MANPREFIX}/man1/${BIN}.1
-	chmod 644 ${DESTDIR}${MANPREFIX}/man1/${BIN}.1
+	cp safe.1 ${DESTDIR}${MANPREFIX}/man1/safe.1
+	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe.1
 
 uninstall:V:
-	rm ${DESTDIR}${PREFIX}/bin/${BIN}
-	rm ${DESTDIR}${MANPREFIX}/man1/${BIN}.1
+	rm ${DESTDIR}${PREFIX}/bin/safe
+	rm ${DESTDIR}${MANPREFIX}/man1/safe.1

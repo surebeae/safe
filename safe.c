@@ -18,6 +18,8 @@
 #include "readpassphrase.h"
 
 #define MDSIZ crypto_generichash_BYTES
+#define SOCKDIR "/tmp/safe-XXXXXX"
+#define SOCKET  "agent"
 #define SAFE ".secrets"
 
 uint8_t *passphrase;
@@ -192,6 +194,63 @@ deriv(char *pw, uint8_t *salt, uint8_t *key, size_t ks)
 }
 
 int
+creatsock(char *sockpath)
+{
+	int sfd;
+	char path[PATH_MAX] = SOCKDIR;
+	struct sockaddr_un addr;
+
+	if (sockpath) {
+		strncpy(path, sockpath, sizeof(path));
+	} else {
+		if (!mkdtemp(path))
+			err(1, "mkdtemp: %s", path);
+
+		strncat(path, "/", 1);
+		strncat(path, SOCKET, sizeof(path));
+	}
+
+	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sfd < 0)
+		err(1, "socket: %s", path);
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strcpy(addr.sun_path, path);
+
+	if (bind(sfd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
+		err(1, "bind: %s", path);
+
+	if (listen(sfd, 10) < 0)
+		err(1, "listen: %s", path);
+
+	return sfd;
+}
+
+int
+agent(char *path)
+{
+	int cfd, sfd;
+	uint8_t salt[crypto_pwhash_SALTBYTES];
+	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+
+	readpass("password:", &passphrase, &pplen);
+
+	sfd = creatsock(path);
+
+	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
+		xread(cfd, salt, sizeof(salt));
+		deriv((char *)passphrase, salt, key, sizeof(key));
+		xwrite(cfd, key, sizeof(key));
+		close(cfd);
+	}
+
+	close(sfd);
+
+	return 0;
+}
+
+int
 getkey(char *path, uint8_t *key, uint8_t *salt)
 {
 	int sfd;
@@ -269,12 +328,18 @@ show_secret(int fd, char *name)
 int
 main(int argc, char *argv[])
 {
-	int aflag = 0, lflag = 0;
-	char *secret = NULL, *safe = SAFE;
+	int aflag = 0, dflag = 0;
+	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
+		break;
+	case 'd':
+		dflag = 1;
+		break;
+	case 'f':
+		sockp = EARGF(usage());
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -283,8 +348,13 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	if (argc != 1 && !lflag)
+	if (argc != 1 && !dflag)
 		usage();
+
+	if (dflag) {
+		agent(sockp);
+		return 0;
+	}
 
 	if (safe) {
 		mkdir(safe, 0700);
