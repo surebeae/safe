@@ -207,7 +207,7 @@ creatsock(char *sockpath)
 			err(1, "mkdtemp: %s", path);
 
 		strncat(path, "/", 1);
-		strncat(path, SOCKET, sizeof(path));
+		strncat(path, SOCKET, sizeof(path) - strlen(SOCKET) - 1);
 	}
 
 	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
