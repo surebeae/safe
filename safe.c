@@ -259,8 +259,7 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, path);
 
-	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (sfd < 0)
+	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		err(1, "socket %s", path);
 
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
@@ -351,16 +350,14 @@ main(int argc, char *argv[])
 	if (argc != 1 && !dflag)
 		usage();
 
-	if (dflag) {
-		agent(sockp);
-		return 0;
-	}
-
 	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
 			err(1, "chdir: %s", safe);
 	}
+
+	if (dflag)
+		return agent(sockp);
 
 	secret = argv[0];
 
