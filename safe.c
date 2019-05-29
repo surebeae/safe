@@ -110,54 +110,52 @@ xwrite(int fd, const void *buf, size_t nbytes)
 }
 
 void
-xencrypt(int ifd, int ofd, uint8_t *key)
+encrypt_stream(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
-	uint8_t in[BUFSIZ];
-	uint8_t out[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	uint8_t m[BUFSIZ];
+	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long len;
 
-	crypto_secretstream_xchacha20poly1305_init_push(&st, hdr, key);
-	xwrite(ofd, hdr, sizeof(hdr));
+	crypto_secretstream_xchacha20poly1305_init_push(&st, h, key);
+	xwrite(ofd, h, sizeof(h));
 
-	while ((n = xread(ifd, in, sizeof(in))) > 0) {
-		if ((size_t) n < sizeof(in))
+	while ((n = xread(ifd, m, sizeof(m))) > 0) {
+		if ((size_t) n < sizeof(m))
 			break;
 
-		crypto_secretstream_xchacha20poly1305_push(&st, out, &len, in, n, NULL, 0, 0);
-		xwrite(ofd, out, len);
+		crypto_secretstream_xchacha20poly1305_push(&st, c, &len, m, n, NULL, 0, 0);
+		xwrite(ofd, c, len);
 	}
 
 	if (n < 0)
-		err(1, "xencrypt");
+		err(1, "encrypt_stream");
 
-	crypto_secretstream_xchacha20poly1305_push(&st, out, &len, in, n, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL);
-	xwrite(ofd, out, len);
+	crypto_secretstream_xchacha20poly1305_push(&st, c, &len, m, n, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL);
+	xwrite(ofd, c, len);
 }
 
 void
-xdecrypt(int ifd, int ofd, uint8_t *key)
+decrypt_stream(int ifd, int ofd, uint8_t *key)
 {
 	ssize_t n;
-	uint8_t out[BUFSIZ];
-	uint8_t in[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	uint8_t hdr[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	uint8_t m[BUFSIZ];
+	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long len;
 
-	xread(ifd, hdr, sizeof(hdr));
-	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, hdr, key)) {
-		fprintf(stderr, "decrypt: incomplete header\n");
+	xread(ifd, h, sizeof(h));
+	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, key)) {
+		fprintf(stderr, "decrypt_stream: incomplete header\n");
 		exit(1);
 	}
 
-	while ((n = xread(ifd, in, sizeof(in))) > 0) {
-		crypto_secretstream_xchacha20poly1305_pull(&st, out,
-		                                           &len, NULL, in, n,
-		                                           NULL, 0);
-		xwrite(ofd, out, len);
+	while ((n = xread(ifd, c, sizeof(c))) > 0) {
+		crypto_secretstream_xchacha20poly1305_pull(&st, m, &len, NULL, c, n, NULL, 0);
+		xwrite(ofd, m, len);
 	}
 }
 
@@ -297,7 +295,7 @@ store_secret(int fd, char *name)
 
 	genkey(key, sizeof(key), salt);
 
-	xencrypt(fd, sfd, key);
+	encrypt_stream(fd, sfd, key);
 	close(sfd);
 
 	return 0;
@@ -318,7 +316,7 @@ show_secret(int fd, char *name)
 
 	genkey(key, sizeof(key), salt);
 
-	xdecrypt(sfd, fd, key);
+	decrypt_stream(sfd, fd, key);
 	close(sfd);
 
 	return 0;
