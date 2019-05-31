@@ -17,7 +17,6 @@
 #include "arg.h"
 #include "readpassphrase.h"
 
-#define MDSIZ crypto_generichash_BYTES
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"
 #define SAFE ".secrets"
@@ -70,19 +69,22 @@ mkdir_p(char *path, mode_t mode)
 }
 
 ssize_t
-xread(int fd, void *buf, size_t nbytes)
+xread(int fd, void *buf, size_t nbytes, int *eof)
 {
 	uint8_t *bp = buf;
 	ssize_t total = 0;
 
+	if (eof) *eof = 1;
 	while (nbytes > 0) {
 		ssize_t n;
 
 		n = read(fd, &bp[total], nbytes);
-		if (n < 0)
+		if (n < 0) {
 			err(1, "read");
-		else if (n == 0)
+		} else if (n == 0) {
+			if (eof) *eof = 1;
 			return total;
+		}
 		total += n;
 		nbytes -= n;
 	}
@@ -112,6 +114,8 @@ xwrite(int fd, const void *buf, size_t nbytes)
 void
 encrypt_stream(int ifd, int ofd, uint8_t *key)
 {
+	int eof;
+	uint8_t tag;
 	ssize_t n;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
@@ -122,24 +126,18 @@ encrypt_stream(int ifd, int ofd, uint8_t *key)
 	crypto_secretstream_xchacha20poly1305_init_push(&st, h, key);
 	xwrite(ofd, h, sizeof(h));
 
-	while ((n = xread(ifd, m, sizeof(m))) > 0) {
-		if ((size_t) n < sizeof(m))
-			break;
-
-		crypto_secretstream_xchacha20poly1305_push(&st, c, &len, m, n, NULL, 0, 0);
+	while ((n = xread(ifd, m, sizeof(m), &eof)) > 0) {
+		tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
+		crypto_secretstream_xchacha20poly1305_push(&st, c, &len, m, n, NULL, 0, tag);
 		xwrite(ofd, c, len);
 	}
-
-	if (n < 0)
-		err(1, "encrypt_stream");
-
-	crypto_secretstream_xchacha20poly1305_push(&st, c, &len, m, n, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL);
-	xwrite(ofd, c, len);
 }
 
 void
 decrypt_stream(int ifd, int ofd, uint8_t *key)
 {
+	int eof;
+	uint8_t tag;
 	ssize_t n;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
@@ -147,14 +145,18 @@ decrypt_stream(int ifd, int ofd, uint8_t *key)
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long len;
 
-	xread(ifd, h, sizeof(h));
+	xread(ifd, h, sizeof(h), NULL);
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, key)) {
 		fprintf(stderr, "decrypt_stream: incomplete header\n");
 		exit(1);
 	}
 
-	while ((n = xread(ifd, c, sizeof(c))) > 0) {
-		crypto_secretstream_xchacha20poly1305_pull(&st, m, &len, NULL, c, n, NULL, 0);
+	while ((n = xread(ifd, c, sizeof(c), &eof)) > 0) {
+		crypto_secretstream_xchacha20poly1305_pull(&st, m, &len, &tag, c, n, NULL, 0);
+		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
+			fprintf(stderr, "decrypt_stream: premature EOF\n");
+			exit(1);
+		}
 		xwrite(ofd, m, len);
 	}
 }
@@ -237,7 +239,7 @@ agent(char *path)
 	sfd = creatsock(path);
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
-		xread(cfd, salt, sizeof(salt));
+		xread(cfd, salt, sizeof(salt), NULL);
 		deriv((char *)passphrase, salt, key, sizeof(key));
 		xwrite(cfd, key, sizeof(key));
 		close(cfd);
@@ -264,7 +266,7 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 		err(1, "connect %s", path);
 
 	xwrite(sfd, salt, crypto_pwhash_SALTBYTES);
-	xread(sfd, key, crypto_secretstream_xchacha20poly1305_KEYBYTES);
+	xread(sfd, key, crypto_secretstream_xchacha20poly1305_KEYBYTES, NULL);
 
 	return 0;
 }
@@ -312,7 +314,7 @@ show_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", name);
 
-	xread(sfd, salt, sizeof(salt));
+	xread(sfd, salt, sizeof(salt), NULL);
 
 	genkey(key, sizeof(key), salt);
 
