@@ -20,6 +20,7 @@
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"
 #define SAFE ".secrets"
+#define LOCK ".lock"
 
 struct safe {
 	crypto_secretstream_xchacha20poly1305_state st;
@@ -176,10 +177,10 @@ readpass(const char *prompt, uint8_t **target, size_t *len)
 }
 
 void
-deriv(char *pw, uint8_t *salt, uint8_t *key, size_t ks)
+deriv(char *pw, struct safe *s)
 {
-	if (crypto_pwhash(key, ks, pw, strlen(pw),
-			salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
+	if (crypto_pwhash(s->key, sizeof(s->key), pw, strlen(pw),
+			s->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
 			crypto_pwhash_MEMLIMIT_INTERACTIVE,
 			crypto_pwhash_ALG_DEFAULT))
 		err(1, "crypto_pwhash");
@@ -231,7 +232,7 @@ agent(char *path)
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
 		xread(cfd, s.salt, sizeof(s.salt), NULL);
-		deriv((char *)passphrase, s.salt, s.key, sizeof(s.key));
+		deriv((char *)passphrase, &s);
 		xwrite(cfd, s.key, sizeof(s.key));
 		close(cfd);
 	}
@@ -263,10 +264,26 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 }
 
 int
-genkey(uint8_t *key, size_t ks, uint8_t *salt)
+genkey(struct safe *s)
 {
+	int sfd;
+	uint8_t *c;
+	unsigned long long clen;
+
 	readpass("password:", &passphrase, &pplen);
-	deriv((char *)passphrase, salt, key, ks);
+	deriv((char *)passphrase, s);
+
+	c = malloc(pplen + crypto_secretstream_xchacha20poly1305_ABYTES);
+
+	secret_encrypt(s, passphrase, pplen, c, &clen, SAFE_INIT | SAFE_FINAL);
+
+	sfd = open(LOCK, O_WRONLY | O_CREAT | O_EXCL, 0600);
+	if (sfd < 0)
+		return 0;
+
+	xwrite(sfd, s->salt, sizeof(s->salt));
+	xwrite(sfd, s->h, sizeof(s->h));
+	xwrite(sfd, c, clen);
 
 	return 0;
 }
@@ -282,14 +299,12 @@ store_secret(int fd, char *name)
 	unsigned long long clen;
 
 	mkdir_p(dirname(name), 0700);
-	sfd = open(name, O_WRONLY | O_CREAT, 0600);
+	sfd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (sfd < 0)
 		err(1, "open %s", name);
 
-	memset(s.salt, 0, sizeof(s.salt));
-
+	genkey(&s);
 	xwrite(sfd, s.salt, sizeof(s.salt));
-	genkey(s.key, sizeof(s.key), s.salt);
 
 	flags = SAFE_INIT;
 	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
@@ -320,9 +335,9 @@ show_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", name);
 
-	xread(sfd, s.salt, sizeof(s.salt), NULL);
-	genkey(s.key, sizeof(s.key), s.salt);
+	genkey(&s);
 
+	xread(sfd, s.salt, sizeof(s.salt), NULL);
 	xread(sfd, s.h, sizeof(s.h), NULL);
 
 	flags = SAFE_INIT;
