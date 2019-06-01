@@ -221,19 +221,18 @@ creatsock(char *sockpath)
 }
 
 int
-agent(char *path)
+agent(struct safe *s, char *path)
 {
 	int cfd, sfd;
-	struct safe s;
 
 	readpass("password:", &passphrase, &pplen);
 
 	sfd = creatsock(path);
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
-		xread(cfd, s.salt, sizeof(s.salt), NULL);
-		deriv((char *)passphrase, &s);
-		xwrite(cfd, s.key, sizeof(s.key));
+		xread(cfd, s->salt, sizeof(s->salt), NULL);
+		deriv((char *)passphrase, s);
+		xwrite(cfd, s->key, sizeof(s->key));
 		close(cfd);
 	}
 
@@ -243,7 +242,7 @@ agent(char *path)
 }
 
 int
-getkey(char *path, uint8_t *key, uint8_t *salt)
+getkey(struct safe *s, char *path)
 {
 	int sfd;
 	struct sockaddr_un addr;
@@ -257,8 +256,8 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		err(1, "connect %s", path);
 
-	xwrite(sfd, salt, crypto_pwhash_SALTBYTES);
-	xread(sfd, key, crypto_secretstream_xchacha20poly1305_KEYBYTES, NULL);
+	xwrite(sfd, s->salt, sizeof(s->salt));
+	xread(sfd, s->key, sizeof(s->key), NULL);
 
 	return 0;
 }
@@ -266,34 +265,18 @@ getkey(char *path, uint8_t *key, uint8_t *salt)
 int
 genkey(struct safe *s)
 {
-	int sfd;
-	uint8_t *c;
-	unsigned long long clen;
-
+	memset(s->salt, 0, sizeof(s->salt));
 	readpass("password:", &passphrase, &pplen);
 	deriv((char *)passphrase, s);
-
-	c = malloc(pplen + crypto_secretstream_xchacha20poly1305_ABYTES);
-
-	secret_encrypt(s, passphrase, pplen, c, &clen, SAFE_INIT | SAFE_FINAL);
-
-	sfd = open(LOCK, O_WRONLY | O_CREAT | O_EXCL, 0600);
-	if (sfd < 0)
-		return 0;
-
-	xwrite(sfd, s->salt, sizeof(s->salt));
-	xwrite(sfd, s->h, sizeof(s->h));
-	xwrite(sfd, c, clen);
 
 	return 0;
 }
 
 int
-store_secret(int fd, char *name)
+store_secret(struct safe *s, int fd, char *name)
 {
 	int sfd, eof, flags = 0;
 	ssize_t n;
-	struct safe s;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	unsigned long long clen;
@@ -303,15 +286,14 @@ store_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", name);
 
-	genkey(&s);
-	xwrite(sfd, s.salt, sizeof(s.salt));
-
 	flags = SAFE_INIT;
 	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
-		secret_encrypt(&s, m, n, c, &clen, flags);
+		secret_encrypt(s, m, n, c, &clen, flags);
+
 		if (flags & SAFE_INIT)
-			xwrite(sfd, s.h, sizeof(s.h));
+			xwrite(sfd, s->h, sizeof(s->h));
+
 		xwrite(sfd, c, clen);
 		flags &= ~(SAFE_INIT);
 	}
@@ -322,11 +304,10 @@ store_secret(int fd, char *name)
 }
 
 int
-show_secret(int fd, char *name)
+show_secret(struct safe *s, int fd, char *name)
 {
 	int sfd, eof, flags = 0;
 	ssize_t n;
-	struct safe s;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	unsigned long long mlen;
@@ -335,15 +316,13 @@ show_secret(int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", name);
 
-	genkey(&s);
-
-	xread(sfd, s.salt, sizeof(s.salt), NULL);
-	xread(sfd, s.h, sizeof(s.h), NULL);
+	xread(sfd, s->h, sizeof(s->h), NULL);
 
 	flags = SAFE_INIT;
 	while ((n = xread(sfd, c, sizeof(c), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
-		secret_decrypt(&s, c, n, m, &mlen, flags);
+		secret_decrypt(s, c, n, m, &mlen, flags);
+
 		xwrite(fd, m, mlen);
 		flags &= ~(SAFE_INIT);
 	}
@@ -358,6 +337,7 @@ main(int argc, char *argv[])
 {
 	int aflag = 0, dflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
+	struct safe s;
 
 	ARGBEGIN {
 	case 'a':
@@ -385,15 +365,17 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
+	genkey(&s);
+
 	if (dflag)
-		return agent(sockp);
+		return agent(&s, sockp);
 
 	secret = argv[0];
 
 	if (aflag) {
-		store_secret(STDIN_FILENO, secret);
+		store_secret(&s, STDIN_FILENO, secret);
 	} else {
-		show_secret(STDOUT_FILENO, secret);
+		show_secret(&s, STDOUT_FILENO, secret);
 	}
 
 	return 0;
