@@ -243,13 +243,9 @@ agent(struct safe *s, char *path)
 {
 	int cfd, sfd;
 
-	readpass("password:", &passphrase, &pplen);
-
 	sfd = creatsock(path);
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
-		xread(cfd, s->salt, sizeof(s->salt), NULL);
-		deriv((char *)passphrase, s);
 		xwrite(cfd, s->key, sizeof(s->key));
 		close(cfd);
 	}
@@ -281,57 +277,6 @@ getkey(struct safe *s, char *path)
 }
 
 int
-genkey(struct safe *s)
-{
-	readpass("password:", &passphrase, &pplen);
-	deriv((char *)passphrase, s);
-
-	return 0;
-}
-
-int
-store_secret(struct safe *s, int fd, char *name)
-{
-	int sfd, eof, flags = 0;
-	ssize_t n;
-	uint8_t m[BUFSIZ];
-	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	unsigned long long clen;
-
-	if (!secret_exists(LOCK))
-		randombytes_buf(s->salt, sizeof(s->salt));
-
-	genkey(s);
-
-	mkdir_p(dirname(name), 0700);
-	sfd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
-	if (sfd < 0)
-		err(1, "%s", name);
-
-	xwrite(sfd, s->salt, sizeof(s->salt));
-
-	flags = SAFE_INIT;
-	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
-		flags |= eof ? SAFE_FINAL : 0;
-		if (secret_encrypt(s, m, n, c, &clen, flags) < 0) {
-			fprintf(stderr, "%s: failed to encrypt password\n", name);
-			close(sfd);
-			return -1;
-		}
-
-		if (flags & SAFE_INIT)
-			xwrite(sfd, s->h, sizeof(s->h));
-
-		xwrite(sfd, c, clen);
-		flags &= ~(SAFE_INIT);
-	}
-
-	close(sfd);
-
-	return 0;
-}
-
-int
 show_secret(struct safe *s, int fd, char *name)
 {
 	int sfd, eof, flags = 0;
@@ -347,18 +292,68 @@ show_secret(struct safe *s, int fd, char *name)
 	xread(sfd, s->salt, sizeof(s->salt), NULL);
 	xread(sfd, s->h, sizeof(s->h), NULL);
 
-	genkey(s);
-
 	flags = SAFE_INIT;
 	while ((n = xread(sfd, c, sizeof(c), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
+
 		if (secret_decrypt(s, c, n, m, &mlen, flags) < 0) {
-			fprintf(stderr, "%s: failed to decrypt password\n", name);
 			close(sfd);
 			return -1;
 		}
 
 		xwrite(fd, m, mlen);
+		flags &= ~(SAFE_INIT);
+	}
+
+	close(sfd);
+
+	return 0;
+}
+
+int
+check_master(struct safe *s)
+{
+	int r, fd;
+
+	fd = open("/dev/null", O_RDONLY);
+	if (fd < 0)
+		err(1, "/dev/null");
+
+	r = show_secret(s, fd, LOCK);
+	close(fd);
+
+	return r;
+}
+
+int
+store_secret(struct safe *s, int fd, char *name)
+{
+	int sfd, eof, flags = 0;
+	ssize_t n;
+	uint8_t m[BUFSIZ];
+	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	unsigned long long clen;
+
+	mkdir_p(dirname(name), 0700);
+	sfd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
+	if (sfd < 0)
+		err(1, "%s", name);
+
+	xwrite(sfd, s->salt, sizeof(s->salt));
+
+	flags = SAFE_INIT;
+	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
+		flags |= eof ? SAFE_FINAL : 0;
+
+		if (secret_encrypt(s, m, n, c, &clen, flags) < 0) {
+			close(sfd);
+			return -1;
+		}
+
+		if (flags & SAFE_INIT)
+			xwrite(sfd, s->h, sizeof(s->h));
+
+		xwrite(sfd, c, clen);
 		flags &= ~(SAFE_INIT);
 	}
 
@@ -403,8 +398,19 @@ main(int argc, char *argv[])
 	if (secret_exists(LOCK)) {
 		if ((fd = open(LOCK, O_RDONLY)) < 0)
 			err(1, "%s", LOCK);
+
 		xread(fd, s.salt, sizeof(s.salt), NULL);
 		close(fd);
+	} else {
+		randombytes_buf(s.salt, sizeof(s.salt));
+	}
+
+	readpass("password:", &passphrase, &pplen);
+	deriv((char *)passphrase, &s);
+
+	if (check_master(&s) < 0) {
+		fprintf(stderr, "master password incorrect\n");
+		return -1;
 	}
 
 	if (dflag)
@@ -413,9 +419,9 @@ main(int argc, char *argv[])
 	secret = argv[0];
 
 	if (aflag) {
-		store_secret(&s, STDIN_FILENO, secret);
+		return store_secret(&s, STDIN_FILENO, secret);
 	} else {
-		show_secret(&s, STDOUT_FILENO, secret);
+		return show_secret(&s, STDOUT_FILENO, secret);
 	}
 
 	return 0;
