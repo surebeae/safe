@@ -126,33 +126,36 @@ xwrite(int fd, const void *buf, size_t nbytes)
 	return total;
 }
 
-void
+int
 secret_encrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned long long *clen, int flags)
 {
 	int tag = 0;
 
 	if (flags & SAFE_INIT)
-		crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key);
+		if (crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key))
+			return -1;
 
 	if (flags & SAFE_FINAL)
 		tag = crypto_secretstream_xchacha20poly1305_TAG_FINAL;
 
-	crypto_secretstream_xchacha20poly1305_push(&s->st, c, clen, m, mlen, NULL, 0, tag);
+	return crypto_secretstream_xchacha20poly1305_push(&s->st, c, clen, m, mlen, NULL, 0, tag);
 }
 
-void
+int
 secret_decrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned long long *mlen, int flags)
 {
 	uint8_t tag;
 	if (flags & SAFE_INIT)
-		crypto_secretstream_xchacha20poly1305_init_pull(&s->st, s->h, s->key);
+		if (crypto_secretstream_xchacha20poly1305_init_pull(&s->st, s->h, s->key))
+			return -1;
 
-	crypto_secretstream_xchacha20poly1305_pull(&s->st, m, mlen, &tag, c, clen, NULL, 0);
+	if (crypto_secretstream_xchacha20poly1305_pull(&s->st, m, mlen, &tag, c, clen, NULL, 0))
+		return -1;
 
-	if (flags & SAFE_FINAL && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
-		fprintf(stderr, "secret_decrypt: premature EOF detected\n");
-		exit(1);
-	}
+	if (flags & SAFE_FINAL && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
+		return -1;
+
+	return 0;
 }
 
 int
@@ -280,17 +283,6 @@ getkey(struct safe *s, char *path)
 int
 genkey(struct safe *s)
 {
-	int fd;
-
-	if (secret_exists(LOCK)) {
-		if ((fd = open(LOCK, O_RDONLY)) < 0)
-			err(1, "open %s", LOCK);
-
-		xread(fd, s->salt, sizeof(s->salt), NULL);
-	} else {
-		randombytes_buf(s->salt, sizeof(s->salt));
-	}
-
 	readpass("password:", &passphrase, &pplen);
 	deriv((char *)passphrase, s);
 
@@ -306,6 +298,11 @@ store_secret(struct safe *s, int fd, char *name)
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	unsigned long long clen;
 
+	if (!secret_exists(LOCK))
+		randombytes_buf(s->salt, sizeof(s->salt));
+
+	genkey(s);
+
 	mkdir_p(dirname(name), 0700);
 	sfd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (sfd < 0)
@@ -316,7 +313,11 @@ store_secret(struct safe *s, int fd, char *name)
 	flags = SAFE_INIT;
 	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
-		secret_encrypt(s, m, n, c, &clen, flags);
+		if (secret_encrypt(s, m, n, c, &clen, flags) < 0) {
+			fprintf(stderr, "%s: failed to encrypt password\n", name);
+			close(sfd);
+			return -1;
+		}
 
 		if (flags & SAFE_INIT)
 			xwrite(sfd, s->h, sizeof(s->h));
@@ -346,10 +347,16 @@ show_secret(struct safe *s, int fd, char *name)
 	xread(sfd, s->salt, sizeof(s->salt), NULL);
 	xread(sfd, s->h, sizeof(s->h), NULL);
 
+	genkey(s);
+
 	flags = SAFE_INIT;
 	while ((n = xread(sfd, c, sizeof(c), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
-		secret_decrypt(s, c, n, m, &mlen, flags);
+		if (secret_decrypt(s, c, n, m, &mlen, flags) < 0) {
+			fprintf(stderr, "%s: failed to decrypt password\n", name);
+			close(sfd);
+			return -1;
+		}
 
 		xwrite(fd, m, mlen);
 		flags &= ~(SAFE_INIT);
@@ -363,7 +370,7 @@ show_secret(struct safe *s, int fd, char *name)
 int
 main(int argc, char *argv[])
 {
-	int aflag = 0, dflag = 0;
+	int fd, aflag = 0, dflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -393,7 +400,12 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	genkey(&s);
+	if (secret_exists(LOCK)) {
+		if ((fd = open(LOCK, O_RDONLY)) < 0)
+			err(1, "%s", LOCK);
+		xread(fd, s.salt, sizeof(s.salt), NULL);
+		close(fd);
+	}
 
 	if (dflag)
 		return agent(&s, sockp);
