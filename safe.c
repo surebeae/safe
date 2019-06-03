@@ -417,6 +417,9 @@ main(int argc, char *argv[])
 	if (argc != 1 && !dflag)
 		usage();
 
+	if (sodium_init() < 0)
+		return -1;
+
 	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
