@@ -201,7 +201,7 @@ deriv(char *pw, struct safe *s)
 			s->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
 			crypto_pwhash_MEMLIMIT_INTERACTIVE,
 			crypto_pwhash_ALG_DEFAULT))
-		err(1, "crypto_pwhash");
+		err(1, "crypto_pwhash:");
 }
 
 int
@@ -306,7 +306,7 @@ store_secret(struct safe *s, int fd, char *name)
 	mkdir_p(dirname(name), 0700);
 	sfd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (sfd < 0)
-		err(1, "open %s", name);
+		err(1, "%s", name);
 
 	xwrite(sfd, s->salt, sizeof(s->salt));
 
@@ -342,7 +342,7 @@ show_secret(struct safe *s, int fd, char *name)
 
 	sfd = open(name, O_RDONLY);
 	if (sfd < 0)
-		err(1, "open %s", name);
+		err(1, "%s", name);
 
 	xread(sfd, s->salt, sizeof(s->salt), NULL);
 	xread(sfd, s->h, sizeof(s->h), NULL);
