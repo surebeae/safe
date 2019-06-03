@@ -323,7 +323,7 @@ check_master(struct safe *s)
 {
 	int r, fd;
 
-	fd = open("/dev/null", O_RDONLY);
+	fd = open("/dev/null", O_WRONLY);
 	if (fd < 0)
 		err(1, "/dev/null");
 
