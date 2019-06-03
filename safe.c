@@ -274,12 +274,11 @@ getkey(struct safe *s, char *path)
 	strcpy(addr.sun_path, path);
 
 	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
-		err(1, "socket %s", path);
+		return -1;
 
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-		err(1, "connect %s", path);
+		return -1;
 
-	xwrite(sfd, s->salt, sizeof(s->salt));
 	xread(sfd, s->key, sizeof(s->key), NULL);
 
 	return 0;
