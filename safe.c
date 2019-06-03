@@ -208,42 +208,51 @@ int
 creatsock(char *sockpath)
 {
 	int sfd;
-	char path[PATH_MAX] = SOCKDIR;
 	struct sockaddr_un addr;
-
-	if (sockpath) {
-		strncpy(path, sockpath, sizeof(path));
-	} else {
-		if (!mkdtemp(path))
-			err(1, "mkdtemp: %s", path);
-
-		strncat(path, "/", 1);
-		strncat(path, SOCKET, sizeof(path) - strlen(SOCKET) - 1);
-	}
 
 	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sfd < 0)
-		err(1, "socket: %s", path);
+		return -1;
 
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
-	strcpy(addr.sun_path, path);
+	strcpy(addr.sun_path, sockpath);
 
 	if (bind(sfd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
-		err(1, "bind: %s", path);
+		return -1;
 
 	if (listen(sfd, 10) < 0)
-		err(1, "listen: %s", path);
+		return -1;
 
 	return sfd;
 }
 
 int
-agent(struct safe *s, char *path)
+agent(struct safe *s, char *sockp)
 {
 	int cfd, sfd;
+	pid_t pid;
+	size_t dirlen;
+	char path[PATH_MAX] = SOCKDIR;
+
+	pid = getpid();
+
+	if (sockp) {
+		strncpy(path, sockp, sizeof(path));
+	} else {
+		if (!mkdtemp(path))
+			err(1, "mkdtemp: %s", path);
+
+		dirlen = strnlen(path, sizeof(path));
+		snprintf(path + dirlen, PATH_MAX - dirlen, "/%s.%d", SOCKET, pid);
+	}
 
 	sfd = creatsock(path);
+	if (sfd < 0)
+		err(1, "%s", path);
+
+	printf("SAFE_PID=%d\n", pid);
+	printf("SAFE_SOCK=%s\n", path);
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
 		xwrite(cfd, s->key, sizeof(s->key));
