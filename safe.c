@@ -285,7 +285,7 @@ agent(struct safe *s, char *sockp)
 }
 
 int
-getkey(struct safe *s, char *path)
+readkey(struct safe *s, char *path)
 {
 	int sfd;
 	struct sockaddr_un addr;
