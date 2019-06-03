@@ -320,6 +320,9 @@ show_secret(struct safe *s, int fd, char *name)
 	xread(sfd, s->salt, sizeof(s->salt), NULL);
 	xread(sfd, s->h, sizeof(s->h), NULL);
 
+	if (!secret_exists(MASTER))
+		deriv((char *)passphrase, s);
+
 	flags = SAFE_INIT;
 	while ((n = xread(sfd, c, sizeof(c), &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
