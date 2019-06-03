@@ -420,6 +420,7 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
+	umask(077);
 	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
