@@ -426,9 +426,14 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	readsalt(s.salt, sizeof(s.salt));
-	readpass("password:", &passphrase, &pplen);
-	deriv((char *)passphrase, &s);
+	if (sockp || (sockp = getenv("SAFE_SOCK"))) {
+		if (readkey(&s, sockp) < 0)
+			err(1, "%s", sockp);
+	} else {
+		readsalt(s.salt, sizeof(s.salt));
+		readpass("password:", &passphrase, &pplen);
+		deriv((char *)passphrase, &s);
+	}
 
 	if (secret_exists(MASTER) && check_master(&s) < 0) {
 		fprintf(stderr, "master password incorrect\n");
