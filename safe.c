@@ -4,6 +4,7 @@
 #include <sys/un.h>
 
 #include <err.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
@@ -155,6 +156,20 @@ secret_decrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned lon
 }
 
 int
+secret_exists(const char *secret)
+{
+	struct stat sb;
+
+	if (!stat(secret, &sb))
+		return 1;
+
+	if (errno == ENOENT)
+		return 0;
+
+	err(1, "stat: %s", secret);
+}
+
+int
 readpass(const char *prompt, uint8_t **target, size_t *len)
 {
 	char pass[BUFSIZ], *p;
@@ -265,7 +280,17 @@ getkey(struct safe *s, char *path)
 int
 genkey(struct safe *s)
 {
-	memset(s->salt, 0, sizeof(s->salt));
+	int fd;
+
+	if (secret_exists(LOCK)) {
+		if ((fd = open(LOCK, O_RDONLY)) < 0)
+			err(1, "open %s", LOCK);
+
+		xread(fd, s->salt, sizeof(s->salt), NULL);
+	} else {
+		randombytes_buf(s->salt, sizeof(s->salt));
+	}
+
 	readpass("password:", &passphrase, &pplen);
 	deriv((char *)passphrase, s);
 
@@ -285,6 +310,8 @@ store_secret(struct safe *s, int fd, char *name)
 	sfd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (sfd < 0)
 		err(1, "open %s", name);
+
+	xwrite(sfd, s->salt, sizeof(s->salt));
 
 	flags = SAFE_INIT;
 	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
@@ -316,6 +343,7 @@ show_secret(struct safe *s, int fd, char *name)
 	if (sfd < 0)
 		err(1, "open %s", name);
 
+	xread(sfd, s->salt, sizeof(s->salt), NULL);
 	xread(sfd, s->h, sizeof(s->h), NULL);
 
 	flags = SAFE_INIT;
