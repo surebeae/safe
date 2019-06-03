@@ -304,7 +304,7 @@ store_secret(struct safe *s, int fd, char *name)
 	genkey(s);
 
 	mkdir_p(dirname(name), 0700);
-	sfd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	sfd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
 	if (sfd < 0)
 		err(1, "%s", name);
 
