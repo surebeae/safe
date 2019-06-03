@@ -194,6 +194,26 @@ readpass(const char *prompt, uint8_t **target, size_t *len)
 	return 0;
 }
 
+int
+readsalt(uint8_t *salt, size_t sz)
+{
+	int fd;
+
+	fd = open(MASTER, O_RDONLY);
+	if (fd < 0) {
+		if (errno != ENOENT)
+			err(1, "%s", MASTER);
+
+		randombytes_buf(salt, sz);
+		return 0;
+	}
+
+	xread(fd, salt, sz, NULL);
+	close(fd);
+
+	return 0;
+}
+
 void
 deriv(char *pw, struct safe *s)
 {
@@ -373,7 +393,7 @@ store_secret(struct safe *s, int fd, char *name)
 int
 main(int argc, char *argv[])
 {
-	int fd, aflag = 0, dflag = 0;
+	int aflag = 0, dflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -403,16 +423,7 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	if (secret_exists(MASTER)) {
-		if ((fd = open(MASTER, O_RDONLY)) < 0)
-			err(1, "%s", MASTER);
-
-		xread(fd, s.salt, sizeof(s.salt), NULL);
-		close(fd);
-	} else {
-		randombytes_buf(s.salt, sizeof(s.salt));
-	}
-
+	readsalt(s.salt, sizeof(s.salt));
 	readpass("password:", &passphrase, &pplen);
 	deriv((char *)passphrase, &s);
 
