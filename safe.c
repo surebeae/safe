@@ -20,8 +20,8 @@
 
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"
-#define SAFE ".secrets"
-#define LOCK ".lock"
+#define MASTER  "safelock"
+#define SAFE    ".secrets"
 
 struct safe {
 	crypto_secretstream_xchacha20poly1305_state st;
@@ -319,7 +319,7 @@ check_master(struct safe *s)
 	if (fd < 0)
 		err(1, "/dev/null");
 
-	r = show_secret(s, fd, LOCK);
+	r = show_secret(s, fd, MASTER);
 	close(fd);
 
 	return r;
@@ -395,9 +395,9 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	if (secret_exists(LOCK)) {
-		if ((fd = open(LOCK, O_RDONLY)) < 0)
-			err(1, "%s", LOCK);
+	if (secret_exists(MASTER)) {
+		if ((fd = open(MASTER, O_RDONLY)) < 0)
+			err(1, "%s", MASTER);
 
 		xread(fd, s.salt, sizeof(s.salt), NULL);
 		close(fd);
@@ -408,7 +408,7 @@ main(int argc, char *argv[])
 	readpass("password:", &passphrase, &pplen);
 	deriv((char *)passphrase, &s);
 
-	if (check_master(&s) < 0) {
+	if (secret_exists(MASTER) && check_master(&s) < 0) {
 		fprintf(stderr, "master password incorrect\n");
 		return -1;
 	}
