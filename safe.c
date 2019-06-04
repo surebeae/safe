@@ -180,26 +180,6 @@ readpass(const char *prompt, uint8_t **target, size_t *len)
 	return 0;
 }
 
-int
-readsalt(uint8_t *salt, size_t sz)
-{
-	int fd;
-
-	fd = open(MASTER, O_RDONLY);
-	if (fd < 0) {
-		if (errno != ENOENT)
-			err(1, "%s", MASTER);
-
-		randombytes_buf(salt, sz);
-		return 0;
-	}
-
-	xread(fd, salt, sz, NULL);
-	close(fd);
-
-	return 0;
-}
-
 void
 deriv(char *pw, struct safe *s)
 {
