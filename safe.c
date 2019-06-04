@@ -24,9 +24,6 @@
 #define SAFE    ".secrets"
 
 struct safe {
-	crypto_secretstream_xchacha20poly1305_state st;
-	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
-
 	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 	uint8_t salt[crypto_pwhash_SALTBYTES];
 };
@@ -246,16 +243,19 @@ writesecret(struct safe *s, int in, int out)
 	uint8_t tag;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
+
 	unsigned long long clen;
 
-	if (crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key))
+	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
 		return -1;
 
-	xwrite(out, s->h, sizeof(s->h));
+	xwrite(out, h, sizeof(h));
 
 	while ((n = xread(in, m, sizeof(m), &eof)) > 0) {
 		tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
-		if (crypto_secretstream_xchacha20poly1305_push(&s->st, c, &clen, m, n, NULL, 0, tag))
+		if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, n, NULL, 0, tag))
 			return -1;
 
 		xwrite(out, c, clen);
@@ -271,14 +271,16 @@ readsecret(struct safe *s, int in, int out)
 	uint8_t tag;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long mlen;
 
-	xread(in, s->h, sizeof(s->h), NULL);
-	if (crypto_secretstream_xchacha20poly1305_init_pull(&s->st, s->h, s->key))
+	xread(in, h, sizeof(h), NULL);
+	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
 		return -1;
 
 	while ((n = xread(in, c, sizeof(c), &eof)) > 0) {
-		if (crypto_secretstream_xchacha20poly1305_pull(&s->st, m, &mlen, &tag, c, n, NULL, 0))
+		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
 			return -1;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
