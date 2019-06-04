@@ -291,90 +291,41 @@ readkey(struct safe *s, char *path)
 }
 
 int
-show_secret(struct safe *s, int fd, char *name)
+fdcrypt(struct safe *s, int fdin, int fdout, int dec)
 {
-	int sfd, eof, flags = 0;
-	ssize_t n;
+	int eof, flags = 0;
+	ssize_t n, sz;
+	uint8_t *in, *out;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	unsigned long long mlen;
+	unsigned long long len;
 
-	sfd = open(name, O_RDONLY);
-	if (sfd < 0)
-		err(1, "%s", name);
+	/* setup buffers for encryption or decryption */
+	in  = dec ? c : m;
+	out = dec ? m : c;
+	sz  = dec ? sizeof(c) : sizeof(m);
 
-	xread(sfd, s->salt, sizeof(s->salt), NULL);
-	xread(sfd, s->h, sizeof(s->h), NULL);
-
-	if (!secret_exists(MASTER))
-		deriv((char *)passphrase, s);
+	if (dec)
+		xread(fdin, s->h, sizeof(s->h), NULL);
 
 	flags = SAFE_INIT;
-	while ((n = xread(sfd, c, sizeof(c), &eof)) > 0) {
+	while ((n = xread(fdin, in, sz, &eof)) > 0) {
 		flags |= eof ? SAFE_FINAL : 0;
 
-		if (secret_decrypt(s, c, n, m, &mlen, flags) < 0) {
-			close(sfd);
-			return -1;
+		if (dec) {
+			if (xdecrypt(s, in, n, out, &len, flags) < 0)
+				return -1;
+		} else {
+			if (xencrypt(s, in, n, out, &len, flags) < 0)
+				return -1;
+
+			if (flags & SAFE_INIT)
+				xwrite(fdout, s->h, sizeof(s->h));
 		}
 
-		xwrite(fd, m, mlen);
+		xwrite(fdout, out, len);
 		flags &= ~(SAFE_INIT);
 	}
-
-	close(sfd);
-
-	return 0;
-}
-
-int
-check_master(struct safe *s)
-{
-	int r, fd;
-
-	fd = open("/dev/null", O_WRONLY);
-	if (fd < 0)
-		err(1, "/dev/null");
-
-	r = show_secret(s, fd, MASTER);
-	close(fd);
-
-	return r;
-}
-
-int
-store_secret(struct safe *s, int fd, char *name)
-{
-	int sfd, eof, flags = 0;
-	ssize_t n;
-	uint8_t m[BUFSIZ];
-	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	unsigned long long clen;
-
-	mkdir_p(dirname(name), 0700);
-	sfd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
-	if (sfd < 0)
-		err(1, "%s", name);
-
-	xwrite(sfd, s->salt, sizeof(s->salt));
-
-	flags = SAFE_INIT;
-	while ((n = xread(fd, m, sizeof(m), &eof)) > 0) {
-		flags |= eof ? SAFE_FINAL : 0;
-
-		if (secret_encrypt(s, m, n, c, &clen, flags) < 0) {
-			close(sfd);
-			return -1;
-		}
-
-		if (flags & SAFE_INIT)
-			xwrite(sfd, s->h, sizeof(s->h));
-
-		xwrite(sfd, c, clen);
-		flags &= ~(SAFE_INIT);
-	}
-
-	close(sfd);
 
 	return 0;
 }
@@ -382,7 +333,7 @@ store_secret(struct safe *s, int fd, char *name)
 int
 main(int argc, char *argv[])
 {
-	int aflag = 0, dflag = 0;
+	int fd, aflag = 0, dflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -416,25 +367,41 @@ main(int argc, char *argv[])
 			err(1, "chdir: %s", safe);
 	}
 
-	if (sockp || (sockp = getenv("SAFE_SOCK"))) {
-		if (readkey(&s, sockp) < 0)
-			err(1, "%s", sockp);
-	} else {
-		readsalt(s.salt, sizeof(s.salt));
-		readpass("password:", &passphrase, &pplen);
-		deriv((char *)passphrase, &s);
-	}
-
 	if (dflag)
 		return agent(&s, sockp);
 
 	secret = argv[0];
 
+	readpass("password:", &passphrase, &pplen);
+
 	if (aflag) {
-		return store_secret(&s, STDIN_FILENO, secret);
+		mkdir_p(dirname(secret), 0700);
+		fd = open(secret, O_WRONLY | O_CREAT | O_EXCL, 0600);
+		if (fd < 0)
+			err(1, "%s", secret);
+
+		/*
+		 * Generate random salt and write it at the beginning
+		 * of our secret file
+		 */
+		randombytes_buf(s.salt, sizeof(s.salt));
+		xwrite(fd, s.salt, sizeof(s.salt));
+		deriv((char *)passphrase, &s);
+
+		fdcrypt(&s, STDIN_FILENO, fd, 0);
+		close(fd);
 	} else {
-		return show_secret(&s, STDOUT_FILENO, secret);
+		fd = open(secret, O_RDONLY);
+		if (fd < 0)
+			err(1, "%s", secret);
+
+		/* Read salt from the beginning of the file */
+		xread(fd, s.salt, sizeof(s.salt), NULL);
+		deriv((char *)passphrase, &s);
+		fdcrypt(&s, fd, STDOUT_FILENO, 1);
+		close(fd);
 	}
+
 
 	return 0;
 }
