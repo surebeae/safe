@@ -341,14 +341,9 @@ main(int argc, char *argv[])
 		if (fd < 0)
 			err(1, "%s", secret);
 
-		/*
-		 * Generate random salt and write it at the beginning
-		 * of our secret file
-		 */
 		randombytes_buf(s.salt, sizeof(s.salt));
 		xwrite(fd, s.salt, sizeof(s.salt));
 		deriv((char *)passphrase, &s);
-
 		writesecret(&s, STDIN_FILENO, fd);
 		close(fd);
 	} else {
