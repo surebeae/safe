@@ -129,7 +129,7 @@ xwrite(int fd, const void *buf, size_t nbytes)
 int
 secret_encrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned long long *clen, int flags)
 {
-	int tag = 0;
+	uint8_t tag = 0;
 
 	if (flags & SAFE_INIT)
 		if (crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key))
