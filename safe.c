@@ -127,38 +127,6 @@ xwrite(int fd, const void *buf, size_t nbytes)
 }
 
 int
-xencrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned long long *clen, int flags)
-{
-	uint8_t tag = 0;
-
-	if (flags & SAFE_INIT)
-		if (crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key))
-			return -1;
-
-	if (flags & SAFE_FINAL)
-		tag = crypto_secretstream_xchacha20poly1305_TAG_FINAL;
-
-	return crypto_secretstream_xchacha20poly1305_push(&s->st, c, clen, m, mlen, NULL, 0, tag);
-}
-
-int
-xdecrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned long long *mlen, int flags)
-{
-	uint8_t tag;
-	if (flags & SAFE_INIT)
-		if (crypto_secretstream_xchacha20poly1305_init_pull(&s->st, s->h, s->key))
-			return -1;
-
-	if (crypto_secretstream_xchacha20poly1305_pull(&s->st, m, mlen, &tag, c, clen, NULL, 0))
-		return -1;
-
-	if (flags & SAFE_FINAL && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
-		return -1;
-
-	return 0;
-}
-
-int
 readpass(const char *prompt, uint8_t **target, size_t *len)
 {
 	char pass[BUFSIZ], *p;
@@ -271,42 +239,53 @@ readkey(struct safe *s, char *path)
 }
 
 int
-fdcrypt(struct safe *s, int fdin, int fdout, int dec)
+writesecret(struct safe *s, int in, int out)
 {
-	int eof, flags = 0;
-	ssize_t n, sz;
-	uint8_t *in, *out;
+	int eof;
+	ssize_t n;
+	uint8_t tag;
 	uint8_t m[BUFSIZ];
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
-	unsigned long long len;
+	unsigned long long clen;
 
-	/* setup buffers for encryption or decryption */
-	in  = dec ? c : m;
-	out = dec ? m : c;
-	sz  = dec ? sizeof(c) : sizeof(m);
+	if (crypto_secretstream_xchacha20poly1305_init_push(&s->st, s->h, s->key))
+		return -1;
 
-	if (dec)
-		xread(fdin, s->h, sizeof(s->h), NULL);
+	xwrite(out, s->h, sizeof(s->h));
 
-	flags = SAFE_INIT;
-	while ((n = xread(fdin, in, sz, &eof)) > 0) {
-		flags |= eof ? SAFE_FINAL : 0;
+	while ((n = xread(in, m, sizeof(m), &eof)) > 0) {
+		tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
+		if (crypto_secretstream_xchacha20poly1305_push(&s->st, c, &clen, m, n, NULL, 0, tag))
+			return -1;
 
-		if (dec) {
-			if (xdecrypt(s, in, n, out, &len, flags) < 0)
-				return -1;
-		} else {
-			if (xencrypt(s, in, n, out, &len, flags) < 0)
-				return -1;
-
-			if (flags & SAFE_INIT)
-				xwrite(fdout, s->h, sizeof(s->h));
-		}
-
-		xwrite(fdout, out, len);
-		flags &= ~(SAFE_INIT);
+		xwrite(out, c, clen);
 	}
+	return 0;
+}
 
+int
+readsecret(struct safe *s, int in, int out)
+{
+	int eof = 0;
+	ssize_t n;
+	uint8_t tag;
+	uint8_t m[BUFSIZ];
+	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	unsigned long long mlen;
+
+	xread(in, s->h, sizeof(s->h), NULL);
+	if (crypto_secretstream_xchacha20poly1305_init_pull(&s->st, s->h, s->key))
+		return -1;
+
+	while ((n = xread(in, c, sizeof(c), &eof)) > 0) {
+		if (crypto_secretstream_xchacha20poly1305_pull(&s->st, m, &mlen, &tag, c, n, NULL, 0))
+			return -1;
+
+		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
+			return -1;
+
+		xwrite(out, m, mlen);
+	}
 	return 0;
 }
 
@@ -368,7 +347,7 @@ main(int argc, char *argv[])
 		xwrite(fd, s.salt, sizeof(s.salt));
 		deriv((char *)passphrase, &s);
 
-		fdcrypt(&s, STDIN_FILENO, fd, 0);
+		writesecret(&s, STDIN_FILENO, fd);
 		close(fd);
 	} else {
 		fd = open(secret, O_RDONLY);
@@ -378,7 +357,7 @@ main(int argc, char *argv[])
 		/* Read salt from the beginning of the file */
 		xread(fd, s.salt, sizeof(s.salt), NULL);
 		deriv((char *)passphrase, &s);
-		fdcrypt(&s, fd, STDOUT_FILENO, 1);
+		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
 
