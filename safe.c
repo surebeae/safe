@@ -89,7 +89,7 @@ xread(int fd, void *buf, size_t nbytes, int *eof)
 	uint8_t *bp = buf;
 	ssize_t total = 0;
 
-	if (eof) *eof = 1;
+	if (eof) *eof = 0;
 	while (nbytes > 0) {
 		ssize_t n;
 
