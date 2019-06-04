@@ -159,20 +159,6 @@ xdecrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned long long
 }
 
 int
-secret_exists(const char *secret)
-{
-	struct stat sb;
-
-	if (!stat(secret, &sb))
-		return 1;
-
-	if (errno == ENOENT)
-		return 0;
-
-	err(1, "stat: %s", secret);
-}
-
-int
 readpass(const char *prompt, uint8_t **target, size_t *len)
 {
 	char pass[BUFSIZ], *p;
@@ -437,11 +423,6 @@ main(int argc, char *argv[])
 		readsalt(s.salt, sizeof(s.salt));
 		readpass("password:", &passphrase, &pplen);
 		deriv((char *)passphrase, &s);
-	}
-
-	if (secret_exists(MASTER) && check_master(&s) < 0) {
-		fprintf(stderr, "master password incorrect\n");
-		return -1;
 	}
 
 	if (dflag)
