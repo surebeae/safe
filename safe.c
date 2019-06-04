@@ -127,7 +127,7 @@ xwrite(int fd, const void *buf, size_t nbytes)
 }
 
 int
-secret_encrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned long long *clen, int flags)
+xencrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned long long *clen, int flags)
 {
 	uint8_t tag = 0;
 
@@ -142,7 +142,7 @@ secret_encrypt(struct safe *s, uint8_t *m, size_t mlen, uint8_t *c, unsigned lon
 }
 
 int
-secret_decrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned long long *mlen, int flags)
+xdecrypt(struct safe *s, uint8_t *c, size_t clen, uint8_t *m, unsigned long long *mlen, int flags)
 {
 	uint8_t tag;
 	if (flags & SAFE_INIT)
