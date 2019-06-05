@@ -400,21 +400,21 @@ main(int argc, char *argv[])
 		close(fd);
 	}
 
-	if (aflag) {
-		fd = open(MASTER, O_RDONLY);
-		if (fd < 0)
-			err(1, "%s", MASTER);
-		xread(fd, s.salt, sizeof(s.salt), NULL);
-		deriv((char *)passphrase, &s);
+	fd = open(MASTER, O_RDONLY);
+	if (fd < 0)
+		err(1, "%s", MASTER);
+	xread(fd, s.salt, sizeof(s.salt), NULL);
+	deriv((char *)passphrase, &s);
 
-		/* do not store secret if master password mismatch */
-		if (trydecrypt(&s, fd) < 0) {
-			fprintf(stderr, "incorrect master password\n");
-			close(fd);
-			return -1;
-		}
+	/* do not store secret if master password mismatch */
+	if (trydecrypt(&s, fd) < 0) {
+		fprintf(stderr, "incorrect master password\n");
 		close(fd);
+		return -1;
+	}
+	close(fd);
 
+	if (aflag) {
 		mkdir_p(dirname(secret), 0700);
 		fd = open(secret, O_WRONLY | O_CREAT | O_EXCL, 0600);
 		if (fd < 0)
@@ -429,7 +429,7 @@ main(int argc, char *argv[])
 			err(1, "%s", secret);
 
 		/* Read salt from the beginning of the file */
-		xread(fd, s.salt, sizeof(s.salt), NULL);
+		lseek(fd, sizeof(s.salt), SEEK_SET);
 		deriv((char *)passphrase, &s);
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
