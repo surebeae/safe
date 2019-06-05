@@ -20,7 +20,7 @@
 
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"
-#define MASTER  "safelock"
+#define MASTER  "master"
 #define SAFE    ".secrets"
 
 struct safe {
@@ -236,6 +236,34 @@ readkey(struct safe *s, char *path)
 }
 
 int
+writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
+{
+	uint8_t *c, h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
+	unsigned long long clen;
+
+	deriv((char *)passphrase, s);
+
+	c = malloc(mlen + crypto_secretstream_xchacha20poly1305_ABYTES);
+	if (!c)
+		err(1, "malloc");
+
+	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
+		return -1;
+
+	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
+		return -1;
+
+	xwrite(fd, s->salt, sizeof(s->salt));
+	xwrite(fd, h, sizeof(h));
+	xwrite(fd, c, clen);
+
+	free(c);
+
+	return 0;
+}
+
+int
 writesecret(struct safe *s, int in, int out)
 {
 	int eof;
@@ -245,7 +273,6 @@ writesecret(struct safe *s, int in, int out)
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-
 	unsigned long long clen;
 
 	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
@@ -335,15 +362,32 @@ main(int argc, char *argv[])
 
 	readpass("password:", &passphrase, &pplen);
 
+	/* create master password entry if it doesn't exists */
+	fd = open(MASTER, O_WRONLY | O_CREAT | O_EXCL, 0600);
+	if (fd < 0) {
+		if (errno != EEXIST)
+			err(1, "%s", MASTER);
+	} else {
+		randombytes_buf(s.salt, sizeof(s.salt));
+		deriv((char *)passphrase, &s);
+		writepass(&s, passphrase, pplen, fd);
+		close(fd);
+	}
+
 	if (aflag) {
+		fd = open(MASTER, O_RDONLY);
+		if (fd < 0)
+			err(1, "%s", MASTER);
+		xread(fd, s.salt, sizeof(s.salt), NULL);
+		deriv((char *)passphrase, &s);
+		close(fd);
+
 		mkdir_p(dirname(secret), 0700);
 		fd = open(secret, O_WRONLY | O_CREAT | O_EXCL, 0600);
 		if (fd < 0)
 			err(1, "%s", secret);
 
-		randombytes_buf(s.salt, sizeof(s.salt));
 		xwrite(fd, s.salt, sizeof(s.salt));
-		deriv((char *)passphrase, &s);
 		writesecret(&s, STDIN_FILENO, fd);
 		close(fd);
 	} else {
