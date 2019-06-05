@@ -280,7 +280,6 @@ writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
 	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
 		return -1;
 
-	xwrite(fd, s->salt, sizeof(s->salt));
 	xwrite(fd, h, sizeof(h));
 	xwrite(fd, c, clen);
 
@@ -396,6 +395,7 @@ main(int argc, char *argv[])
 	} else {
 		randombytes_buf(s.salt, sizeof(s.salt));
 		deriv((char *)passphrase, &s);
+		xwrite(fd, s.salt, sizeof(s.salt));
 		writepass(&s, passphrase, pplen, fd);
 		close(fd);
 	}
