@@ -236,6 +236,32 @@ readkey(struct safe *s, char *path)
 }
 
 int
+trydecrypt(struct safe *s, int fd)
+{
+	int eof = 0;
+	ssize_t n;
+	uint8_t tag;
+	uint8_t m[BUFSIZ];
+	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	crypto_secretstream_xchacha20poly1305_state st;
+	unsigned long long mlen;
+
+	xread(fd, h, sizeof(h), NULL);
+	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
+		return -1;
+
+	while ((n = xread(fd, c, sizeof(c), &eof)) > 0) {
+		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
+			return -1;
+
+		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
+			return -1;
+	}
+	return 0;
+}
+
+int
 writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
 {
 	uint8_t *c, h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
@@ -380,6 +406,13 @@ main(int argc, char *argv[])
 			err(1, "%s", MASTER);
 		xread(fd, s.salt, sizeof(s.salt), NULL);
 		deriv((char *)passphrase, &s);
+
+		/* do not store secret if master password mismatch */
+		if (trydecrypt(&s, fd) < 0) {
+			fprintf(stderr, "incorrect master password\n");
+			close(fd);
+			return -1;
+		}
 		close(fd);
 
 		mkdir_p(dirname(secret), 0700);
@@ -401,7 +434,6 @@ main(int argc, char *argv[])
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
-
 
 	return 0;
 }
