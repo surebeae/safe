@@ -6,11 +6,11 @@ Store your secrets in an encrypted safe, protected by a password.
 
 	safe [-ad] [-f socket] [secret..]
 
-	# list all your deepest secrets
-	find .secrets -type f
-
 	# add a secret to your safe
 	safe -a my/deepest/secret < cute-kitten.gif
+
+	# list all your deepest secrets
+	find .secrets -type f
 
 	# start a safe agent
 	safe -d
@@ -21,36 +21,75 @@ Store your secrets in an encrypted safe, protected by a password.
 ## goals
 
 + Only require a master password to unlock
-+ Provide a way to open/lock the safe (agent?)
-+ Store any kind of file
-+ Do not expose file hierarchy if locked (really?)
++ Provide a way to open/lock the safe (agent)
++ Store any kind of secret (stream encryption)
 
 ## design
 
-Your safe is stored on disk as a directory tree, with the following structure:
+Your safe is stored on disk as a directory tree:
 
 	.secrets
+	.secrets/master
 	.secrets/webmail
 	.secrets/work/webmail
 	.secrets/work/master
 
-Where each file represent a "secret".
+Each file represent a "secret" and is the concatenation of a salt and
+the data encrypted with this salt:
 
-You can then retrieve secrets by requesting them, and typing your master
-password to decrypt them.
+                [16 bytes salt][encrypted data]
 
-To make it more usable, the safe is accessible through an agent (let's
-call it Edgard), which acts as a gatekeeper.
-When you want to retrieve a secret, you ask Edgard for it, and he will
-decrypt it for you on stdout.
+Data is encrypted using the xchacha20[0] algorithm, using a key derived
+from your master password and a salt (stored along with your password).
 
-When you first call Edgard, he will ask you for your master password,
-so he can decrypt the secrets for you.
+## "master" entry
 
-As the password must be kept in memory to derivate the key, using
-Edgard means that an intruder could extract this password from memory
-and use it to decrypt secrets. If you're concerned about this, don't
-call Edgard.
+The safe uses one entry named "master" (set at compile time) as a
+reference for your master password + salt.
+This entry is automatically created when you add your first entry to
+the safe. It contains your master password and can be retrieved just
+like any other entry from the safe. The content is not used for anything
+though, so it could be anything.
+
+What's so special about this entry is that its salt is the reference salt
+for all secrets added after this one (which typically means: ALL OF THEM.)
+As this salt is used to derivate a key, it is really important not to
+loose it, so it is stored with all other passwords as well, in case you
+accidentaly remove the "master" entry from the safe.
+
+If it ever happens, you can easily recreate it with the following
+commands (assuming "foo" is a secret that was previously created using
+the lost master):
+	
+	ln .secrets/foo .secrets/master
+	echo "your master password" | pass -a master2
+	unlink .secrets/master
+	mv .secrets/master{2,}
+	chmod 400 .secrets/master
+
+Note that a safe without a "master" entry can easily be corrupted as it
+may end up with different keys used to encrypt your secret, so treat the
+"master" entry with respect :)
+
+## agent
+
+Typing your master password for each encryption/decryption is tedious,
+so the safe comes with a built-in agent that can save your key in memory,
+and serve it through a socket, so you don't have to type your password.
+
+Upon starting, the agent will output two shell variables:
+
+* SAFE_SOCK - containing the path to this agent's socket
+* SAFE_PID  - containing the PID of the currently started agent
+
+If you export these in your environment, later calls of safe(1) will
+use these variables to communicate with the agent and retrieve the key
+through the agent's socket.
+
+You can use the PID to kill the agent when you want to "lock" the safe.
 
 ## license
-This software is licensed under the ISC license, see the LICENSE file provided.
+This software is licensed under the ISC license, see the LICENSE file
+provided.
+
+[0]: https://download.libsodium.org/doc/advanced/stream_ciphers/xchacha20
