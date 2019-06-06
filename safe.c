@@ -40,7 +40,7 @@ char *argv0;
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-hd] [-s safe] [[-a] entry]\n", argv0);
 	exit(1);
 }
 
