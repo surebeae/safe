@@ -380,46 +380,53 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
-	umask(077);
 	if (safe) {
 		mkdir(safe, 0700);
 		if (chdir(safe) < 0)
 			err(1, "chdir: %s", safe);
 	}
 
-	if (dflag)
-		return agent(&s, sockp);
+	/* open master password as read only to retrieve salt */
+	fd = open(MASTER, O_RDONLY);
+	if (fd < 0 && errno != ENOENT)
+		err(1, "%s", MASTER);
 
-	secret = argv[0];
-
-	readpass("password:", &passphrase, &pplen);
-
-	/* create master password entry if it doesn't exists */
-	fd = open(MASTER, O_WRONLY | O_CREAT | O_EXCL, 0600);
-	if (fd < 0) {
-		if (errno != EEXIST)
-			err(1, "%s", MASTER);
+	if (sockp || (sockp = getenv("SAFE_SOCK"))) {
+		if (readkey(&s, sockp) < 0)
+			err(1, "%s", sockp);
 	} else {
-		randombytes_buf(s.salt, sizeof(s.salt));
-		deriv((char *)passphrase, &s);
-		xwrite(fd, s.salt, sizeof(s.salt));
-		writepass(&s, passphrase, pplen, fd);
-		close(fd);
+		readpass("password:", &passphrase, &pplen);
+
+		/* write master password entry if not present */
+		if (fd < 0 && errno == ENOENT) {
+			fd = open(MASTER, O_RDWR | O_CREAT | O_EXCL, 0600);
+			if (fd < 0)
+				err(1, "%s", MASTER);
+
+			randombytes_buf(s.salt, sizeof(s.salt));
+			deriv((char *)passphrase, &s);
+
+			xwrite(fd, s.salt, sizeof(s.salt));
+			writepass(&s, passphrase, pplen, fd);
+		} else {
+			xread(fd, s.salt, sizeof(s.salt), NULL);
+			deriv((char *)passphrase, &s);
+		}
 	}
 
-	fd = open(MASTER, O_RDONLY);
-	if (fd < 0)
-		err(1, "%s", MASTER);
-	xread(fd, s.salt, sizeof(s.salt), NULL);
-	deriv((char *)passphrase, &s);
-
-	/* do not store secret if master password mismatch */
+	/* try to decrypt master password first, to ensure passphrase match */
+	lseek(fd, sizeof(s.salt), SEEK_SET);
 	if (trydecrypt(&s, fd) < 0) {
 		fprintf(stderr, "incorrect master password\n");
 		close(fd);
 		return -1;
 	}
 	close(fd);
+
+	if (dflag)
+		return agent(&s, sockp);
+
+	secret = argv[0];
 
 	if (aflag) {
 		mkdir_p(dirname(secret), 0700);
@@ -437,7 +444,6 @@ main(int argc, char *argv[])
 
 		/* Read salt from the beginning of the file */
 		lseek(fd, sizeof(s.salt), SEEK_SET);
-		deriv((char *)passphrase, &s);
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
