@@ -357,15 +357,14 @@ main(int argc, char *argv[])
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
+	sockp = getenv("SAFE_SOCK");
+
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
 		break;
 	case 'd':
 		dflag = 1;
-		break;
-	case 'f':
-		sockp = EARGF(usage());
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -391,7 +390,7 @@ main(int argc, char *argv[])
 	if (fd < 0 && errno != ENOENT)
 		err(1, "%s", MASTER);
 
-	if (sockp || (sockp = getenv("SAFE_SOCK"))) {
+	if (sockp) {
 		if (readkey(&s, sockp) < 0)
 			err(1, "%s", sockp);
 	} else {
