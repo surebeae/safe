@@ -206,6 +206,7 @@ agent(struct safe *s, char *sockp)
 	printf("SAFE_SOCK=%s\n", path);
 
 	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
+		xwrite(cfd, s->salt, sizeof(s->salt));
 		xwrite(cfd, s->key, sizeof(s->key));
 		close(cfd);
 	}
@@ -230,7 +231,13 @@ readkey(struct safe *s, char *path)
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		return -1;
 
-	xread(sfd, s->key, sizeof(s->key), NULL);
+	if (xread(sfd, s->salt, sizeof(s->salt), NULL) < 0)
+		return -1;
+
+	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0)
+		return -1;
+
+	close(sfd);
 
 	return 0;
 }
