@@ -165,6 +165,7 @@ creatsock(char *sockpath)
 	if (sfd < 0)
 		return -1;
 
+	umask(0077);
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, sockpath);
