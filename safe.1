@@ -6,16 +6,73 @@
 .Nd Digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl h
+.Op Fl hd
+.Op Fl s Ar safe
+.Op Fl a
+.Ar secret
 .Sh DESCRIPTION
 .Nm
 stores secrets (files) encrypted on your disk, and lets you retrieve them,
-given that you have the password.
+given that you have the right password.
+.El
 .Bl -tag -width Ds
+.It Ar secret
+Decrypt file
+.Ar secret
+from your safe to stdout.
 .It Fl h
 Print a quick usage text.
-.El
-.Sh SEE ALSO
-.Xr openssl 1 ,
+.It Fl d
+Start the safe agent (see AGENT).
+.It Fl s Ar safe
+Set the path to your safe as
+.Ar safe .
+(default: .secrets)
+.It Fl a Ar secret
+Encrypt stdin to your safe as
+.Ar secret .
+.Sh AGENT
+The agent will prompt you for your password, and derivate the key from that.
+Once the key is in memory, the agent will open a socket (see ENVIRONMENT),
+and write the salt + key to whichever process connects to this socket.
+This socket is created with mode 700 to prevent reading from other users.
+.Sh MASTER PASSWORD
+When you add your first secret to the safe, another
+.Ar master
+entry will be automatically created. This entry stores your master
+password, and is used to check that your password is correctly typed
+later. Do not try to delete it as it could corrupt your safe.
+.Sh EXAMPLES
+.Bd -literal
+Store a secret in your safe
+
+	$ safe -a secret/file < kitten.gif
+
+List all secrets in $STORE (choose your weapon)
+
+	$ tree --noreport $STORE
+	$ find $STORE -type f
+	$ ls -R $STORE
+	$ tar -C $STORE -v -f /dev/null -c . | cut -d / -f 2-
+
+Retrieve a secret from your safe
+
+	$ STORE=$HOME/.secrets
+	$ safe -s /mnt/safe passwords/email
+
+Automatically start the agent on login (add this to your .shellrc)
+
+	safe -d > $HOME/.safe-agent
+	echo 'export SAFE_SOCK' >> $HOME/.safe-agent
+	. $HOME/.safe-agent
+
+.Sh ENVIRONMENT
+.Bl -tag -width "SAFE_SOCK"
+.It Ev SAFE_SOCK
+If this variable is set,
+.Nm
+will try to read the key from this socket rather than derivating it
+from your master password. This is useful if you don't want to type your
+password for each encryption/decryption.
 .Sh AUTHORS
-.An Willy Goiffon Aq Mt contact@z3bra.org
+.An Willy Goiffon Aq Mt dev@z3bra.org
