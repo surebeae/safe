@@ -22,8 +22,10 @@ Decrypt file
 from your safe to stdout.
 .It Fl h
 Print a quick usage text.
-.It Fl d
-Start the safe agent (see AGENT).
+.It Fl p
+Push key to the
+.Ev SAFE_SOCK
+agent socket (see AGENT).
 .It Fl s Ar safe
 Set the path to your safe as
 .Ar safe .
@@ -32,10 +34,16 @@ Set the path to your safe as
 Encrypt stdin to your safe as
 .Ar secret .
 .Sh AGENT
-The agent will prompt you for your password, and derivate the key from that.
-Once the key is in memory, the agent will open a socket (see ENVIRONMENT),
-and write the salt + key to whichever process connects to this socket.
-This socket is created with mode 700 to prevent reading from other users.
+When the agent is started,
+.Nm
+can retrieve the key from it rather than prompting you for a password.
+.Nm
+will try to get the key from the agent whenever the
+.Ev SAFE_SOCK
+variable is set in the environment. When the agent is first started,
+you have to push you key to it using the
+.Fl p
+flag.
 .Sh MASTER PASSWORD
 When you add your first secret to the safe, another
 .Ar master
@@ -55,16 +63,12 @@ List all secrets in $STORE (choose your weapon)
 	$ ls -R $STORE
 	$ tar -C $STORE -v -f /dev/null -c . | cut -d / -f 2-
 
-Retrieve a secret from your safe
+Retrieve a secret from your safe, using the agent
 
-	$ STORE=$HOME/.secrets
-	$ safe -s /mnt/safe passwords/email
-
-Automatically start the agent on login (add this to your .shellrc)
-
-	safe -d & > $HOME/.safe-agent
-	echo 'export SAFE_SOCK' >> $HOME/.safe-agent
-	. $HOME/.safe-agent
+	$ eval $(safe-agent)
+	$ safe -p
+	password:
+	$ safe passwords/email
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
