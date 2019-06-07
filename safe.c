@@ -18,8 +18,6 @@
 #include "arg.h"
 #include "readpassphrase.h"
 
-#define SOCKDIR "/tmp/safe-XXXXXX"
-#define SOCKET  "agent"
 #define MASTER  "master"
 #define SAFE    ".secrets"
 
@@ -40,7 +38,7 @@ char *argv0;
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-hd] [-s safe] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
 	exit(1);
 }
 
@@ -156,61 +154,25 @@ deriv(char *pw, struct safe *s)
 }
 
 int
-creatsock(char *sockpath)
+pushkey(struct safe *s, char *path)
 {
 	int sfd;
 	struct sockaddr_un addr;
 
-	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (sfd < 0)
-		return -1;
-
-	umask(0077);
-	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
-	strcpy(addr.sun_path, sockpath);
+	strcpy(addr.sun_path, path);
 
-	if (bind(sfd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
+	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
 
-	if (listen(sfd, 10) < 0)
+	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		return -1;
 
-	return sfd;
-}
+	if (xwrite(sfd, s->salt, sizeof(s->salt)) < 0)
+		return -1;
 
-int
-agent(struct safe *s, char *sockp)
-{
-	int cfd, sfd;
-	pid_t pid;
-	size_t dirlen;
-	char path[PATH_MAX] = SOCKDIR;
-
-	pid = getpid();
-
-	if (sockp) {
-		strncpy(path, sockp, sizeof(path));
-	} else {
-		if (!mkdtemp(path))
-			err(1, "mkdtemp: %s", path);
-
-		dirlen = strnlen(path, sizeof(path));
-		snprintf(path + dirlen, PATH_MAX - dirlen, "/%s.%d", SOCKET, pid);
-	}
-
-	sfd = creatsock(path);
-	if (sfd < 0)
-		err(1, "%s", path);
-
-	printf("SAFE_PID=%d\n", pid);
-	printf("SAFE_SOCK=%s\n", path);
-
-	while ((cfd = accept(sfd, NULL, NULL)) > 0) {
-		xwrite(cfd, s->salt, sizeof(s->salt));
-		xwrite(cfd, s->key, sizeof(s->key));
-		close(cfd);
-	}
+	if (write(sfd, s->key, sizeof(s->key)) < 0)
+		return -1;
 
 	close(sfd);
 
@@ -354,7 +316,7 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, aflag = 0, dflag = 0;
+	int fd, aflag = 0, pflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -364,8 +326,8 @@ main(int argc, char *argv[])
 	case 'a':
 		aflag = 1;
 		break;
-	case 'd':
-		dflag = 1;
+	case 'p':
+		pflag = 1;
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -374,7 +336,7 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	if (argc != 1 && !dflag)
+	if (argc != 1 && !pflag)
 		usage();
 
 	if (sodium_init() < 0)
@@ -391,7 +353,7 @@ main(int argc, char *argv[])
 	if (fd < 0 && errno != ENOENT)
 		err(1, "%s", MASTER);
 
-	if (sockp) {
+	if (sockp && !pflag) {
 		if (readkey(&s, sockp) < 0)
 			err(1, "%s", sockp);
 	} else {
@@ -423,8 +385,8 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	if (dflag)
-		return agent(&s, sockp);
+	if (pflag)
+		return pushkey(&s, sockp);
 
 	secret = argv[0];
 
