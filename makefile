@@ -18,14 +18,14 @@ clean:
 	rm -f *.o safe safe-agent
 
 install: safe safe-agent
-        mkdir -p ${DESTDIR}${PREFIX}/bin
-        cp safe ${DESTDIR}${PREFIX}/bin/safe
-        cp safe-agent ${DESTDIR}${PREFIX}/bin/safe-agent
-        chmod 755 ${DESTDIR}${PREFIX}/bin/safe
-        chmod 755 ${DESTDIR}${PREFIX}/bin/safe-agent
-        mkdir -p ${DESTDIR}${MANPREFIX}/man1
-        cp safe.1 ${DESTDIR}${MANPREFIX}/man1/safe.1
-        chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe.1
+	mkdir -p ${DESTDIR}${PREFIX}/bin
+	cp safe ${DESTDIR}${PREFIX}/bin/safe
+	cp safe-agent ${DESTDIR}${PREFIX}/bin/safe-agent
+	chmod 755 ${DESTDIR}${PREFIX}/bin/safe
+	chmod 755 ${DESTDIR}${PREFIX}/bin/safe-agent
+	mkdir -p ${DESTDIR}${MANPREFIX}/man1
+	cp safe.1 ${DESTDIR}${MANPREFIX}/man1/safe.1
+	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe.1
 
 
 uninstall::
