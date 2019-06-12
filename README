@@ -4,21 +4,27 @@ Store your secrets in an encrypted safe, protected by a password.
 
 ## usage
 
-	safe [-ad] [-f socket] [secret..]
+	safe [-hp] [-f socket] [[-a] secret]
 
 	# add a secret to your safe
 	safe -a my/deepest/secret < cute-kitten.gif
 
-	# list all your deepest secrets
-	find .secrets -type f
-
-	# start a safe agent
-	safe -d
-
 	# retrieve a secret from your safe
 	safe my/deepest/secret
 
-## goals
+	# list all your deepest secrets
+	find .secrets -type f
+
+	# start a safe agent, export variables to the environment
+	# and push your key to it
+	eval $(safe-agent &)
+	safe -p
+
+	# have the agent forget the key
+	kill -USR1 $SAFE_PID
+
+
+## features
 
 + Only require a master password to unlock
 + Provide a way to open/lock the safe (agent)
