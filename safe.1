@@ -1,12 +1,12 @@
 .Dd 2019-02-20
-.Dt PM 1
+.Dt SAFE 1
 .Os POSIX.1-2008
 .Sh NAME
 .Nm safe
 .Nd Digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl hd
+.Op Fl hp
 .Op Fl s Ar safe
 .Op Fl a
 .Ar secret
@@ -38,18 +38,20 @@ When the agent is started,
 .Nm
 can retrieve the key from it rather than prompting you for a password.
 .Nm
-will try to get the key from the agent whenever the
+will try to read the key from the agent whenever the
 .Ev SAFE_SOCK
 variable is set in the environment. When the agent is first started,
-you have to push you key to it using the
+you can push the key to it using the
 .Fl p
 flag.
 .Sh MASTER PASSWORD
-When you add your first secret to the safe, another
+When you add your first secret to the safe, a
 .Ar master
-entry will be automatically created. This entry stores your master
-password, and is used to check that your password is correctly typed
-later. Do not try to delete it as it could corrupt your safe.
+entry will be created automatically. This entry stores your master
+password, and is used to check that you typed the master password
+correctly on the next calls.
+.Pp
+Do not delete this entry.
 .Sh EXAMPLES
 .Bd -literal
 Store a secret in your safe
@@ -65,7 +67,7 @@ List all secrets in $STORE (choose your weapon)
 
 Retrieve a secret from your safe, using the agent
 
-	$ eval $(safe-agent)
+	$ eval $(safe-agent &)
 	$ safe -p
 	password:
 	$ safe passwords/email
@@ -75,8 +77,11 @@ Retrieve a secret from your safe, using the agent
 .It Ev SAFE_SOCK
 If this variable is set,
 .Nm
-will try to read the key from this socket rather than derivating it
-from your master password. This is useful if you don't want to type your
-password for each encryption/decryption.
+will read the key from the UNIX-domain socket pointed to by this variable.
+.Sh BUGS
+When the agent does not have the key in memory,
+.Nm
+will simply hang when trying to read from the socket.
 .Sh AUTHORS
-.An Willy Goiffon Aq Mt dev@z3bra.org
+.An
+.Pp Willy Goiffon Aq Mt dev@z3bra.org
