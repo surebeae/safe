@@ -1,0 +1,56 @@
+.Dd 2019-06-08
+.Dt SAFE-AGENT 1
+.Os POSIX.1-2008
+.Sh NAME
+.Nm safe-agent
+.Nd Digital safe for your secrets
+.Sh SYNOPSIS
+.Nm
+.Op Fl h
+.Op Fl t Ar timeout
+.Op Fl f Ar socket
+.Sh DESCRIPTION
+.Nm
+can retain a derivated key and its salt in memroy, and send it over a
+UNIX-domain socket to whichever process can read this socket.
+.Pp
+Pushing a key and its salt is done by writing them to the socket. The
+retained key can be instantly forgotten by sending signal
+.Ar SIGUSR1 or SIGALRM
+to the running agent.
+.El
+.Bl -tag -width Ds
+.It Fl h
+Print a quick usage text.
+.It Fl t Ar timeout
+Retain the key for
+.Ar timeout
+seconds. This will setup an
+.Xr alarm 2
+timer, which make the agent forget the key after the timeout.
+.It Fl f Ar socket
+Bind agent to
+.Ar socket
+UNIX-domain socket.
+(default: /tmp/safe-XXXXXX/agent.ppid)
+.Pp
+The agent prints will print commands (
+.Xr sh 1 )
+to stdout, that can be evaluated by the calling shell for exportation
+to the environment.
+.Pp
+Later calls to
+.Xr safe 1
+will use these environment variables internally to retrieve the key and
+use it to encrypt/decrypt the stored secrets.
+.Bd -literal
+.Sh ENVIRONMENT
+.Bl -tag -width "SAFE_SOCK"
+.It Ev SAFE_SOCK
+Stores the path to the UNIX-domain socket used to communicate with
+the agent.
+.It Ev SAFE_PID
+Stores the PID of the currently running agent.
+
+.Sh AUTHORS
+.An Willy Goiffon Aq Mt dev@z3bra.org

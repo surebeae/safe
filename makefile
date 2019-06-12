@@ -26,9 +26,12 @@ install: safe safe-agent
 	mkdir -p ${DESTDIR}${MANPREFIX}/man1
 	cp safe.1 ${DESTDIR}${MANPREFIX}/man1/safe.1
 	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe.1
+	cp safe-agent.1 ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
+	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
 
 
 uninstall::
 	rm ${DESTDIR}${PREFIX}/bin/safe
 	rm ${DESTDIR}${PREFIX}/bin/safe-agent
 	rm ${DESTDIR}${MANPREFIX}/man1/safe.1
+	rm ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
