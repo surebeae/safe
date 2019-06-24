@@ -212,7 +212,7 @@ err:
 int
 trydecrypt(struct safe *s, int fd)
 {
-	int eof = 0;
+	int r = 0, eof = 0;
 	ssize_t n;
 	uint8_t tag;
 	uint8_t m[BUFSIZ];
@@ -225,14 +225,16 @@ trydecrypt(struct safe *s, int fd)
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
 		return -1;
 
+	sodium_mlock(m, sizeof(m));
 	while ((n = xread(fd, c, sizeof(c), &eof)) > 0) {
 		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
-			return -1;
+			r--;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
-			return -1;
+			r--;
 	}
-	return 0;
+	sodium_munlock(m, sizeof(m));
+	return r;
 }
 
 int
@@ -345,6 +347,8 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
+	sodium_mlock(s.key, sizeof(s.key));
+
 	if (!safe)
 		safe = SAFE;
 
@@ -364,6 +368,7 @@ main(int argc, char *argv[])
 
 	if (!haskey) {
 		readpass("password:", &passphrase, &pplen);
+		sodium_mlock(passphrase, pplen);
 
 		/* write master password entry if not present */
 		if (fd < 0 && errno == ENOENT) {
@@ -372,10 +377,13 @@ main(int argc, char *argv[])
 
 			/* input for master password again to check */
 			readpass("verify:", &passphrase2, &pplen2);
+			sodium_mlock(passphrase2, pplen2);
+
 			if (pplen != pplen2 || memcmp(passphrase, passphrase2, pplen)) {
 				fprintf(stderr, "password mismatch\n");
 				return -1;
 			}
+			sodium_munlock(passphrase2, pplen2);
 
 			fd = open(MASTER, O_RDWR | O_CREAT | O_EXCL, 0600);
 			if (fd < 0)
@@ -391,6 +399,7 @@ main(int argc, char *argv[])
 			deriv((char *)passphrase, &s);
 		}
 
+		sodium_munlock(passphrase, pplen);
 		haskey = 1;
 	}
 
@@ -431,6 +440,8 @@ main(int argc, char *argv[])
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
+
+	sodium_munlock(s.key, sizeof(s.key));
 
 	return 0;
 }

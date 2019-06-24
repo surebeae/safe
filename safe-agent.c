@@ -121,26 +121,33 @@ creatsock(char *sockpath)
 void
 forgetkey()
 {
-	memset(s.saltkey, 0, sizeof(s.saltkey));
+	sodium_memzero(s.saltkey, sizeof(s.saltkey));
 	s.loaded = 0;
 	alarm(0);
-	fprintf(stderr, "memory cleared\n");
 }
 
 void
 sighandler(int signal)
 {
+	int term = 0;
+
 	switch (signal) {
 	case SIGINT:
 	case SIGTERM:
-		unlink(sockp);
-		rmdir(dirname(sockp));
-		exit(0);
-		/* NOTREACHED */
+		term = 1;
+		/* FALLTHROUGH */
 	case SIGALRM:
 	case SIGUSR1:
 		forgetkey();
+
 		break;
+	}
+
+	if (term) {
+		unlink(sockp);
+		rmdir(dirname(sockp));
+		sodium_munlock(s.saltkey, sizeof(s.saltkey));
+		exit(0);
 	}
 }
 
@@ -258,6 +265,11 @@ skip:
 	signal(SIGTERM, sighandler);
 	signal(SIGUSR1, sighandler);
 	signal(SIGALRM, sighandler);
+
+	if (sodium_init() < 0)
+		return -1;
+
+	sodium_mlock(s.saltkey, sizeof(s.saltkey));
 
 	return servekey(timeout);
 }
