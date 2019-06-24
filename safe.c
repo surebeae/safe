@@ -327,6 +327,7 @@ main(int argc, char *argv[])
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
+	safe  = getenv("SAFE_DIR");
 	sockp = getenv("SAFE_SOCK");
 
 	ARGBEGIN {
@@ -349,11 +350,12 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
-	if (safe) {
-		mkdir(safe, 0700);
-		if (chdir(safe) < 0)
-			err(1, "chdir: %s", safe);
-	}
+	if (!safe)
+		safe = SAFE;
+
+	mkdir(safe, 0700);
+	if (chdir(safe) < 0)
+		err(1, "chdir: %s", safe);
 
 	/* open master password as read only to retrieve salt */
 	fd = open(MASTER, O_RDONLY);

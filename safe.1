@@ -73,10 +73,10 @@ Retrieve a secret from your safe
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
+.It Ev SAFE_DIR
+Defines the location of your safe (default: .secrets)
 .It Ev SAFE_SOCK
-If this variable is set,
-.Nm
-will read the key from the UNIX-domain socket pointed to by this variable.
+Path to the UNIX-domain socket used to communicate with the agent.
 .Sh BUGS
 When the agent does not have the key in memory,
 .Nm
