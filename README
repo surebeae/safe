@@ -17,7 +17,7 @@ Store your secrets in an encrypted safe, protected by a password.
 
 	# start a safe agent, export variables to the environment
 	# and push your key to it
-	eval $(safe-agent &)
+	eval $(safe-agent)
 	safe -p
 
 	# have the agent forget the key

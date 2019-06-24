@@ -45,7 +45,16 @@ Later calls to
 .Xr safe 1
 will use these environment variables internally to retrieve the key and
 use it to encrypt/decrypt the stored secrets.
+
+.Sh EXAMPLES
 .Bd -literal
+Retrieve a secret from your safe, using the agent
+
+	$ eval $(safe-agent)
+	$ safe -p
+	password:
+	$ safe secret/file > kitten.gif
+
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
 .It Ev SAFE_SOCK

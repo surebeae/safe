@@ -40,8 +40,9 @@ can retrieve the key from it rather than prompting you for a password.
 .Nm
 will try to read the key from the agent whenever the
 .Ev SAFE_SOCK
-variable is set in the environment. When the agent is first started,
-you can push the key to it using the
+variable is set in the environment.
+.Pp
+When the agent is first started, you can push the key to it using the
 .Fl p
 flag.
 .Sh MASTER PASSWORD
@@ -65,12 +66,10 @@ List all secrets in $STORE (choose your weapon)
 	$ ls -R $STORE
 	$ tar -C $STORE -v -f /dev/null -c . | cut -d / -f 2-
 
-Retrieve a secret from your safe, using the agent
+Retrieve a secret from your safe
 
-	$ eval $(safe-agent &)
-	$ safe -p
+	$ safe secret/file > kitten.gif
 	password:
-	$ safe passwords/email
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
