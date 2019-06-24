@@ -192,7 +192,7 @@ int
 main(int argc, char *argv[])
 {
 	pid_t pid;
-	int dflag, timeout;
+	int timeout, fd, dflag;
 	size_t dirlen;
 	char path[PATH_MAX] = SOCKDIR;
 
@@ -223,14 +223,37 @@ main(int argc, char *argv[])
 		sockp = path;
 	}
 
-	printf("SAFE_PID=%d\n", pid);
-	printf("SAFE_SOCK=%s\n", sockp);
-	printf("export SAFE_PID SAFE_SOCK\n");
-	fflush(stdout);
+	if (dflag) {
+		printf("SAFE_PID=%d; export SAFE_PID\n", pid);
+		printf("SAFE_SOCK=%s; export SAFE_SOCK\n", sockp);
+		fflush(stdout);
+		goto skip;
+	}
 
-	if (!dflag)
-		daemon(0, 0);
+	pid = fork();
+	if (pid < 0)
+		err(1, "fork");
 
+	if (pid) {
+		printf("SAFE_PID=%d; export SAFE_PID\n", pid);
+		printf("SAFE_SOCK=%s; export SAFE_SOCK\n", sockp);
+		return 0;
+	}
+
+	if (setsid() < 0)
+		err(1, "setsid");
+
+	chdir("/");
+	if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
+		(void)dup2(fd, STDIN_FILENO);
+		(void)dup2(fd, STDOUT_FILENO);
+		(void)dup2(fd, STDERR_FILENO);
+		if (fd > 2)
+			close(fd);
+	}
+
+skip:
+	pid = getpid();
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
 	signal(SIGUSR1, sighandler);
