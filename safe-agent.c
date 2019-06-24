@@ -6,6 +6,7 @@
 #include <err.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -146,8 +147,9 @@ sighandler(int signal)
 int
 servekey(int timeout)
 {
-	int cfd, sfd;
+	int r, sfd;
 	ssize_t n;
+	struct pollfd pfd;
 
 	sfd = creatsock(sockp);
 	if (sfd < 0)
@@ -156,21 +158,28 @@ servekey(int timeout)
 	s.loaded = 0;
 
 	for (;;) {
-		cfd = accept(sfd, NULL, NULL);
-		if (cfd < 0)
+		pfd.fd = accept(sfd, NULL, NULL);
+		pfd.events = POLLIN|POLLOUT|POLLERR;
+
+		if (pfd.fd < 0)
 			err(1, "%s", sockp);
 
-		n = 0;
-		if (s.loaded) {
-			xwrite(cfd, s.saltkey, sizeof(s.saltkey));
-		} else {
-			n = xread(cfd, s.saltkey, sizeof(s.saltkey));
+		if ((r = poll(&pfd, 1, 0)) < 1)
+			return r;
+
+		if (pfd.revents & POLLOUT) {
+			n = s.loaded ? sizeof(s.saltkey) : 0;
+			xwrite(pfd.fd, s.saltkey, n);
+		}
+
+		if (pfd.revents & POLLIN) {
+			n = xread(pfd.fd, s.saltkey, sizeof(s.saltkey));
 			if (n == sizeof(s.saltkey)) {
 				s.loaded = 1;
 				alarm(timeout);
 			}
 		}
-		close(cfd);
+		close(pfd.fd);
 	}
 
 	/* NOTREACHED */
