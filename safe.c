@@ -193,23 +193,20 @@ readkey(struct safe *s, char *path)
 		return -1;
 
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-		return -1;
+		goto err;
 
-	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) < 0)
-		return -1;
-
-	if (!n) {
-		errno = ENOKEY;
-		close(sfd);
-		return -1;
-	}
+	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) <= 0)
+		goto err;
 
 	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0)
-		return -1;
+		goto err;
 
 	close(sfd);
-
 	return 0;
+
+err:
+	close(sfd);
+	return -1;
 }
 
 int
