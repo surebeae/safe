@@ -183,22 +183,36 @@ int
 readkey(struct safe *s, char *path)
 {
 	int sfd;
+	ssize_t n;
 	struct sockaddr_un addr;
 
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, path);
 
-	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+		err(1, "%s", path);
 		return -1;
+	}
 
-	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		err(1, "%s", path);
 		return -1;
+	}
 
-	if (xread(sfd, s->salt, sizeof(s->salt), NULL) < 0)
+	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) < 0) {
+		err(1, "%s", path);
 		return -1;
+	}
 
-	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0)
+	if (!n) {
+		close(sfd);
 		return -1;
+	}
+
+	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0) {
+		err(1, "%s", path);
+		return -1;
+	}
 
 	close(sfd);
 
@@ -316,7 +330,7 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, aflag = 0, pflag = 0;
+	int fd, haskey = 0, aflag = 0, pflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -354,9 +368,11 @@ main(int argc, char *argv[])
 		err(1, "%s", MASTER);
 
 	if (sockp && !pflag) {
-		if (readkey(&s, sockp) < 0)
-			err(1, "%s", sockp);
-	} else {
+		if (!readkey(&s, sockp))
+			haskey = 1;
+	}
+
+	if (!haskey) {
 		readpass("password:", &passphrase, &pplen);
 
 		/* write master password entry if not present */
@@ -374,6 +390,8 @@ main(int argc, char *argv[])
 			xread(fd, s.salt, sizeof(s.salt), NULL);
 			deriv((char *)passphrase, &s);
 		}
+
+		haskey = 1;
 	}
 
 	/* try to decrypt master password first, to ensure passphrase match */
