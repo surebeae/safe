@@ -242,8 +242,6 @@ writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long clen;
 
-	deriv((char *)passphrase, s);
-
 	c = malloc(mlen + crypto_secretstream_xchacha20poly1305_ABYTES);
 	if (!c)
 		err(1, "malloc");
