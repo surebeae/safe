@@ -189,30 +189,23 @@ readkey(struct safe *s, char *path)
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, path);
 
-	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
-		err(1, "%s", path);
+	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
-	}
 
-	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		err(1, "%s", path);
+	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		return -1;
-	}
 
-	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) < 0) {
-		err(1, "%s", path);
+	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) < 0)
 		return -1;
-	}
 
 	if (!n) {
+		errno = ENOKEY;
 		close(sfd);
 		return -1;
 	}
 
-	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0) {
-		err(1, "%s", path);
+	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0)
 		return -1;
-	}
 
 	close(sfd);
 
