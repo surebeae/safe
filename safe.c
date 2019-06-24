@@ -405,8 +405,12 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	if (pflag)
+	if (pflag) {
+		if (!sockp)
+			return -1;
+
 		return pushkey(&s, sockp);
+	}
 
 	secret = argv[0];
 
