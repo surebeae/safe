@@ -377,6 +377,16 @@ main(int argc, char *argv[])
 
 		/* write master password entry if not present */
 		if (fd < 0 && errno == ENOENT) {
+			uint8_t *passphrase2;
+			size_t pplen2;
+
+			/* input for master password again to check */
+			readpass("verify:", &passphrase2, &pplen2);
+			if (pplen != pplen2 || memcmp(passphrase, passphrase2, pplen)) {
+				fprintf(stderr, "password mismatch\n");
+				return -1;
+			}
+
 			fd = open(MASTER, O_RDWR | O_CREAT | O_EXCL, 0600);
 			if (fd < 0)
 				err(1, "%s", MASTER);
