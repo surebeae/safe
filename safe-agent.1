@@ -6,7 +6,7 @@
 .Nd Digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl h
+.Op Fl hd
 .Op Fl t Ar timeout
 .Op Fl f Ar socket
 .Sh DESCRIPTION
@@ -22,6 +22,8 @@ to the running agent.
 .Bl -tag -width Ds
 .It Fl h
 Print a quick usage text.
+.It Fl d
+Do not detach the process from the controlling terminal.
 .It Fl t Ar timeout
 Retain the key for
 .Ar timeout

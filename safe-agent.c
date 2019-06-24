@@ -135,7 +135,7 @@ sighandler(int signal)
 		unlink(sockp);
 		rmdir(dirname(sockp));
 		exit(0);
-		/* FALLTHROUGH */
+		/* NOTREACHED */
 	case SIGALRM:
 	case SIGUSR1:
 		forgetkey();
@@ -183,13 +183,16 @@ int
 main(int argc, char *argv[])
 {
 	pid_t pid;
-	int timeout;
+	int dflag, timeout;
 	size_t dirlen;
 	char path[PATH_MAX] = SOCKDIR;
 
 	pid = getpid();
 
 	ARGBEGIN {
+	case 'd':
+		dflag = 1;
+		break;
 	case 'f':
 		sockp = EARGF(usage());
 		break;
@@ -214,6 +217,10 @@ main(int argc, char *argv[])
 	printf("SAFE_PID=%d\n", pid);
 	printf("SAFE_SOCK=%s\n", sockp);
 	printf("export SAFE_PID SAFE_SOCK\n");
+	fflush(stdout);
+
+	if (!dflag)
+		daemon(0, 0);
 
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
