@@ -8,7 +8,7 @@
 
 .Sh SYNOPSIS
 .Nm
-.Op Fl hd
+.Op Fl hdv
 .Op Fl t Ar timeout
 .Op Fl f Ar socket
 
@@ -27,6 +27,11 @@ to the running agent.
 Print a quick usage text.
 .It Fl d
 Do not detach the process from the controlling terminal.
+.It Fl v
+Turn on verbose mode.
+.Nm
+will print debugging messages to stderr. This is useful to troubleshoot
+connection issues between the agent and the client.
 .It Fl t Ar timeout
 Retain the key for
 .Ar timeout

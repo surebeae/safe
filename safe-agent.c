@@ -26,15 +26,15 @@ struct safe {
 	uint8_t saltkey[crypto_secretstream_xchacha20poly1305_KEYBYTES + crypto_pwhash_SALTBYTES];
 };
 
-int loop = 1;
 char *argv0;
 struct safe s;
 char *sockp = NULL;
+int verbose = 0;
 
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-hd] [-t timeout] [-f socket]\n", argv0);
+	fprintf(stderr, "usage: %s [-hdv] [-t timeout] [-f socket]\n", argv0);
 	exit(1);
 }
 
@@ -129,25 +129,25 @@ forgetkey()
 void
 sighandler(int signal)
 {
-	int term = 0;
-
 	switch (signal) {
 	case SIGINT:
 	case SIGTERM:
-		term = 1;
-		/* FALLTHROUGH */
-	case SIGALRM:
-	case SIGUSR1:
-		forgetkey();
+		if (verbose)
+			fprintf(stderr, "unlocking key from memory\n");
+		sodium_munlock(s.saltkey, sizeof(s.saltkey));
 
-		break;
-	}
-
-	if (term) {
+		if (verbose)
+			fprintf(stderr, "removing socket %s\n", sockp);
 		unlink(sockp);
 		rmdir(dirname(sockp));
-		sodium_munlock(s.saltkey, sizeof(s.saltkey));
 		exit(0);
+		/* NOTREACHED */
+	case SIGALRM:
+	case SIGUSR1:
+		if (verbose)
+			fprintf(stderr, "clearing key from memory\n");
+		forgetkey();
+		break;
 	}
 }
 
@@ -158,6 +158,8 @@ servekey(int timeout)
 	ssize_t n;
 	struct pollfd pfd;
 
+	if (verbose)
+		fprintf(stderr, "listening on %s\n", sockp);
 	sfd = creatsock(sockp);
 	if (sfd < 0)
 		err(1, "%s", sockp);
@@ -174,16 +176,31 @@ servekey(int timeout)
 		if ((r = poll(&pfd, 1, 0)) < 1)
 			return r;
 
-		if (pfd.revents & POLLOUT) {
-			n = s.loaded ? sizeof(s.saltkey) : 0;
-			xwrite(pfd.fd, s.saltkey, n);
-		}
-
 		if (pfd.revents & POLLIN) {
+			if (verbose)
+				fprintf(stderr, "reading key from client\n");
 			n = xread(pfd.fd, s.saltkey, sizeof(s.saltkey));
 			if (n == sizeof(s.saltkey)) {
 				s.loaded = 1;
+				if (verbose) {
+					fprintf(stderr, "key loaded in memory\n");
+					if (timeout > 0)
+						fprintf(stderr, "setting timeout to %d seconds\n", timeout);
+				}
 				alarm(timeout);
+			} else {
+				forgetkey();
+				if (verbose)
+					fprintf(stderr, "failed to load key in memory\n");
+			}
+		} else if (pfd.revents & POLLOUT) {
+			if (s.loaded) {
+				if (verbose)
+					fprintf(stderr, "sending key to client\n");
+				xwrite(pfd.fd, s.saltkey, sizeof(s.saltkey));
+			} else {
+				if (verbose)
+					fprintf(stderr, "no key loaded in memory\n");
 			}
 		}
 		close(pfd.fd);
@@ -191,7 +208,6 @@ servekey(int timeout)
 
 	/* NOTREACHED */
 	close(sfd);
-
 	return 0;
 }
 
@@ -215,6 +231,9 @@ main(int argc, char *argv[])
 	case 't':
 		timeout = atoi(EARGF(usage()));
 		break;
+	case 'v':
+		verbose = 1;
+		break;
 	default:
 		usage();
 	} ARGEND
@@ -237,11 +256,17 @@ main(int argc, char *argv[])
 		goto skip;
 	}
 
+	if (verbose)
+		fprintf(stderr, "forking agent to the background\n");
+
 	pid = fork();
 	if (pid < 0)
 		err(1, "fork");
 
 	if (pid) {
+		if (verbose)
+			fprintf(stderr, "agent pid is %d\n", pid);
+
 		printf("SAFE_PID=%d; export SAFE_PID\n", pid);
 		printf("SAFE_SOCK=%s; export SAFE_SOCK\n", sockp);
 		return 0;
@@ -269,6 +294,8 @@ skip:
 	if (sodium_init() < 0)
 		return -1;
 
+	if (verbose)
+		fprintf(stderr, "locking key in memory\n");
 	sodium_mlock(s.saltkey, sizeof(s.saltkey));
 
 	return servekey(timeout);
