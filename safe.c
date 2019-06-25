@@ -361,9 +361,14 @@ main(int argc, char *argv[])
 	if (fd < 0 && errno != ENOENT)
 		err(1, "%s", MASTER);
 
-	if (sockp && !pflag) {
+	if (!pflag && sockp) {
 		if (!readkey(&s, sockp))
 			haskey = 1;
+	}
+
+	if (pflag && !sockp) {
+		fprintf(stderr, "SAFE_SOCK variable is not set\n");
+		return -1;
 	}
 
 	if (!haskey) {
@@ -412,12 +417,8 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	if (pflag) {
-		if (!sockp)
-			return -1;
-
+	if (pflag)
 		return pushkey(&s, sockp);
-	}
 
 	secret = argv[0];
 
