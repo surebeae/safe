@@ -1,15 +1,18 @@
 .Dd 2019-02-20
 .Dt SAFE 1
-.Os POSIX.1-2008
+.Os POSIX.1-2017
+
 .Sh NAME
 .Nm safe
 .Nd Digital safe for your secrets
+
 .Sh SYNOPSIS
 .Nm
 .Op Fl hp
 .Op Fl s Ar safe
 .Op Fl a
 .Ar secret
+
 .Sh DESCRIPTION
 .Nm
 stores secrets (files) encrypted on your disk, and lets you retrieve them,
@@ -33,6 +36,7 @@ Set the path to your safe as
 .It Fl a Ar secret
 Encrypt stdin to your safe as
 .Ar secret .
+
 .Sh AGENT
 When the agent is started,
 .Nm
@@ -45,6 +49,7 @@ variable is set in the environment.
 When the agent is first started, you can push the key to it using the
 .Fl p
 flag.
+
 .Sh MASTER PASSWORD
 When you add your first secret to the safe, a
 .Ar master
@@ -52,7 +57,8 @@ entry will be created automatically. This entry stores your master
 password, and is used to check that you typed the master password
 correctly on the next calls.
 .Pp
-Do not delete this entry.
+Do not delete this entry as it could lead to a corrupted safe.
+
 .Sh EXAMPLES
 .Bd -literal
 Store a secret in your safe
@@ -77,10 +83,6 @@ Retrieve a secret from your safe
 Defines the location of your safe (default: .secrets)
 .It Ev SAFE_SOCK
 Path to the UNIX-domain socket used to communicate with the agent.
-.Sh BUGS
-When the agent does not have the key in memory,
-.Nm
-will simply hang when trying to read from the socket.
+
 .Sh AUTHORS
-.An
-.Pp Willy Goiffon Aq Mt dev@z3bra.org
+.An Willy Goiffon Aq Mt dev@z3bra.org

@@ -1,14 +1,17 @@
 .Dd 2019-06-08
 .Dt SAFE-AGENT 1
-.Os POSIX.1-2008
+.Os POSIX.1-2017
+
 .Sh NAME
 .Nm safe-agent
 .Nd Digital safe for your secrets
+
 .Sh SYNOPSIS
 .Nm
 .Op Fl hd
 .Op Fl t Ar timeout
 .Op Fl f Ar socket
+
 .Sh DESCRIPTION
 .Nm
 can retain a derivated key and its salt in memroy, and send it over a
@@ -57,11 +60,11 @@ Retrieve a secret from your safe, using the agent
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
+.It Ev SAFE_PID
+Stores the PID of the currently running agent.
 .It Ev SAFE_SOCK
 Stores the path to the UNIX-domain socket used to communicate with
 the agent.
-.It Ev SAFE_PID
-Stores the PID of the currently running agent.
 
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org

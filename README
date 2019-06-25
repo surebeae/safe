@@ -12,7 +12,7 @@ Store your secrets in an encrypted safe, protected by a password.
 	# retrieve a secret from your safe
 	safe my/deepest/secret
 
-	# list all your deepest secrets
+	# list all your secrets
 	find .secrets -type f
 
 	# start a safe agent, export variables to the environment
@@ -32,7 +32,9 @@ Store your secrets in an encrypted safe, protected by a password.
 
 ## design
 
-Your safe is stored on disk as a directory tree:
+Your safe is stored on disk as a directory tree, which location is set
+at compilation time (default: .secrets). This location can later be
+changed with the SAFE_DIR environment variable, or using the -s flag.
 
 	.secrets
 	.secrets/master
