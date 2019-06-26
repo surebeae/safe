@@ -320,7 +320,7 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, haskey = 0, aflag = 0, pflag = 0;
+	int fd, haskey = 0, hasmaster = 1, aflag = 0, pflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
 
@@ -358,8 +358,11 @@ main(int argc, char *argv[])
 
 	/* open master password as read only to retrieve salt */
 	fd = open(MASTER, O_RDONLY);
-	if (fd < 0 && errno != ENOENT)
-		err(1, "%s", MASTER);
+	if (fd < 0) {
+		if (errno != ENOENT)
+			err(1, "%s", MASTER);
+		hasmaster = 0;
+	}
 
 	if (!pflag && sockp) {
 		if (!readkey(&s, sockp))
@@ -376,7 +379,7 @@ main(int argc, char *argv[])
 		sodium_mlock(passphrase, pplen);
 
 		/* write master password entry if not present */
-		if (fd < 0 && errno == ENOENT) {
+		if (!hasmaster) {
 			uint8_t *passphrase2 = NULL;
 			size_t pplen2 = 0;
 
