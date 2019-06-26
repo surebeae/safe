@@ -31,8 +31,8 @@ enum {
 	SAFE_FINAL = 1 << 2,
 };
 
-uint8_t *passphrase;
-size_t pplen;
+uint8_t *passphrase = NULL;
+size_t pplen = 0;
 char *argv0;
 
 void
@@ -377,8 +377,8 @@ main(int argc, char *argv[])
 
 		/* write master password entry if not present */
 		if (fd < 0 && errno == ENOENT) {
-			uint8_t *passphrase2;
-			size_t pplen2;
+			uint8_t *passphrase2 = NULL;
+			size_t pplen2 = 0;
 
 			/* input for master password again to check */
 			readpass("verify:", &passphrase2, &pplen2);
