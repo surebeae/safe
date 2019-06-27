@@ -442,7 +442,9 @@ main(int argc, char *argv[])
 	}
 
 	if (!haskey) {
-		readpass("password:", &passphrase, &pplen);
+		if (readpass("password:", &passphrase, &pplen) < 0)
+			return -1;
+
 		sodium_mlock(passphrase, pplen);
 
 		/* write master password entry if not present */
@@ -451,7 +453,9 @@ main(int argc, char *argv[])
 			size_t pplen2 = 0;
 
 			/* input for master password again to check */
-			readpass("verify:", &passphrase2, &pplen2);
+			if (readpass("verify:", &passphrase2, &pplen2) < 0)
+				return -1;
+
 			sodium_mlock(passphrase2, pplen2);
 
 			if (pplen != pplen2 || memcmp(passphrase, passphrase2, pplen)) {
