@@ -1,3 +1,4 @@
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -383,6 +384,7 @@ main(int argc, char *argv[])
 	int fd, haskey = 0, hasmaster = 1, aflag = 0, pflag = 0;
 	char *secret = NULL, *sockp = NULL, *safe = SAFE;
 	struct safe s;
+	struct rlimit rlim;
 
 	safe  = getenv("SAFE_DIR");
 	sockp = getenv("SAFE_SOCK");
@@ -408,6 +410,11 @@ main(int argc, char *argv[])
 		return -1;
 
 	sodium_mlock(s.key, sizeof(s.key));
+
+	/* deny core dump as memory contains passwords and keys */
+	rlim.rlim_cur = rlim.rlim_max = 0;
+	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
+		err(1, "setrlimit RLIMIT_CORE");
 
 	if (!safe)
 		safe = SAFE;

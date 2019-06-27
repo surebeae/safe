@@ -1,3 +1,4 @@
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -218,6 +219,7 @@ main(int argc, char *argv[])
 	int timeout, fd, dflag;
 	size_t dirlen;
 	char path[PATH_MAX] = SOCKDIR;
+	struct rlimit rlim;
 
 	pid = getpid();
 
@@ -248,6 +250,11 @@ main(int argc, char *argv[])
 		snprintf(path + dirlen, PATH_MAX - dirlen, "/%s.%d", SOCKET, pid);
 		sockp = path;
 	}
+
+	/* deny core dump as memory contains derivated key */
+	rlim.rlim_cur = rlim.rlim_max = 0;
+	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
+		err(1, "setrlimit RLIMIT_CORE");
 
 	if (dflag) {
 		printf("SAFE_PID=%d; export SAFE_PID\n", pid);
