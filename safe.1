@@ -83,6 +83,9 @@ Retrieve a secret from your safe
 Defines the location of your safe (default: .secrets)
 .It Ev SAFE_SOCK
 Path to the UNIX-domain socket used to communicate with the agent.
+.It Ev SAFE_ASKPASS
+If no TTY is available, the program specified by this variable will be
+used to read the master password (default: thingaskpass)
 
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org

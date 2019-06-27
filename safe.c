@@ -2,11 +2,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <paths.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +20,7 @@
 #include "arg.h"
 #include "readpassphrase.h"
 
+#define ASKPASS "thingaskpass"
 #define MASTER  "master"
 #define SAFE    ".secrets"
 
@@ -121,14 +124,71 @@ xwrite(int fd, const void *buf, size_t nbytes)
 	return total;
 }
 
+char *
+spawn_askpass(const char *askpass, const char *msg, char *buf, size_t bufsiz)
+{
+	pid_t pid, ret;
+	int p[2], eof, status;
+
+	if (!askpass) {
+		sodium_memzero(buf, bufsiz);
+		return buf;
+	}
+
+	if (pipe(p) < 0)
+		return NULL;
+
+	pid = fork();
+	if (pid < 0)
+		return NULL;
+
+	if (!pid) {
+		close(p[0]);
+		if (dup2(p[1], STDOUT_FILENO) < 0)
+			return NULL;
+
+		execlp(askpass, askpass, msg, NULL);
+		err(1, "execlp(%s)", askpass); /* NOTREACHED */
+	}
+	close(p[1]);
+
+	xread(p[0], buf, bufsiz - 1, &eof);
+	close(p[0]);
+
+	ret = waitpid(pid, &status, 0);
+
+	if (ret < 0 || !WIFEXITED(status) || WEXITSTATUS(status)) {
+		sodium_memzero(buf, bufsiz);
+		return buf;
+	}
+
+	buf[strcspn(buf, "\r\n")] = '\0';
+	return buf;
+}
+
 int
 readpass(const char *prompt, uint8_t **target, size_t *len)
 {
-	char pass[BUFSIZ], *p;
+	int ttyfd;
+	char pass[BUFSIZ], *askpass, *p;
 
-	p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF);
-	if (!p)
-		err(1, "readpassphrase:");
+	/*
+	 * read passphrase from an ASKPASS program stdout if there is
+	 * no tty available
+	 */
+	if ((ttyfd = open(_PATH_TTY, O_RDWR)) < 0) {
+		askpass = ASKPASS;
+		if (getenv("SAFE_ASKPASS"))
+			askpass = getenv("SAFE_ASKPASS");
+		p = spawn_askpass(askpass, prompt, pass, sizeof(pass));
+		if (!p)
+			err(1, "askpass:");
+	} else {
+		close(ttyfd);
+		p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF|RPP_REQUIRE_TTY);
+		if (!p)
+			err(1, "readpassphrase:");
+	}
 
 	if (p[0] == '\0')
 		return -1;
