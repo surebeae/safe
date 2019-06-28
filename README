@@ -2,9 +2,7 @@
 
 Store your secrets in an encrypted safe, protected by a password.
 
-## usage
-
-	safe [-hp] [-f socket] [[-a] secret]
+## examples
 
 	# add a secret to your safe
 	safe -a my/deepest/secret < cute-kitten.gif
@@ -18,7 +16,7 @@ Store your secrets in an encrypted safe, protected by a password.
 	# start a safe agent, export variables to the environment
 	# and push your key to it
 	eval $(safe-agent)
-	safe -p
+	safe -r
 
 	# have the agent forget the key
 	kill -USR1 $SAFE_PID
