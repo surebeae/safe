@@ -8,7 +8,8 @@
 
 .Sh SYNOPSIS
 .Nm
-.Op Fl hp
+.Op Fl hr
+.Op Fl s Ar prompt
 .Op Fl s Ar safe
 .Op Fl a
 .Ar secret
@@ -25,10 +26,15 @@ Decrypt file
 from your safe to stdout.
 .It Fl h
 Print a quick usage text.
-.It Fl p
-Push key to the
+.It Fl r
+Remember the password. The variable
 .Ev SAFE_SOCK
-agent socket (see AGENT).
+must be set and point to the UNIX-domain socket bound by a running agent
+(see AGENT).
+.It Fl p Ar prompt
+Prompt user for password using text
+.Ar prompt .
+(default: "password:")
 .It Fl s Ar safe
 Set the path to your safe as
 .Ar safe .

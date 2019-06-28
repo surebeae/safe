@@ -42,7 +42,7 @@ char *argv0;
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-h] [-s safe] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-hr] [-s safe] [-p prompt] [[-a] entry]\n", argv0);
 	exit(1);
 }
 
@@ -381,20 +381,24 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, haskey = 0, hasmaster = 1, aflag = 0, pflag = 0;
-	char *secret = NULL, *sockp = NULL, *safe = SAFE;
+	int fd, haskey = 0, hasmaster = 1, aflag = 0, rflag = 0;
+	char *prompt, *secret, *sockp, *safe = SAFE;
 	struct safe s;
 	struct rlimit rlim;
 
-	safe  = getenv("SAFE_DIR");
-	sockp = getenv("SAFE_SOCK");
+	safe   = getenv("SAFE_DIR");
+	sockp  = getenv("SAFE_SOCK");
+	prompt = "password:";
 
 	ARGBEGIN {
 	case 'a':
 		aflag = 1;
 		break;
 	case 'p':
-		pflag = 1;
+		prompt = EARGF(usage());
+		break;
+	case 'r':
+		rflag = 1;
 		break;
 	case 's':
 		safe = EARGF(usage());
@@ -403,7 +407,7 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	if (argc != 1 && !pflag)
+	if (argc != 1 && !rflag)
 		usage();
 
 	if (sodium_init() < 0)
@@ -431,18 +435,18 @@ main(int argc, char *argv[])
 		hasmaster = 0;
 	}
 
-	if (!pflag && sockp) {
+	if (!rflag && sockp) {
 		if (!readkey(&s, sockp))
 			haskey = 1;
 	}
 
-	if (pflag && !sockp) {
+	if (rflag && !sockp) {
 		fprintf(stderr, "SAFE_SOCK variable is not set\n");
 		return -1;
 	}
 
 	if (!haskey) {
-		if (readpass("password:", &passphrase, &pplen) < 0)
+		if (readpass(prompt, &passphrase, &pplen) < 0)
 			return -1;
 
 		sodium_mlock(passphrase, pplen);
@@ -491,7 +495,7 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	if (pflag)
+	if (rflag)
 		return pushkey(&s, sockp);
 
 	secret = argv[0];
