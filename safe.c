@@ -435,15 +435,8 @@ main(int argc, char *argv[])
 		hasmaster = 0;
 	}
 
-	if (!rflag && sockp) {
-		if (!readkey(&s, sockp))
-			haskey = 1;
-	}
-
-	if (rflag && !sockp) {
-		fprintf(stderr, "SAFE_SOCK variable is not set\n");
-		return -1;
-	}
+	if (sockp && !readkey(&s, sockp))
+		haskey = 1;
 
 	if (!haskey) {
 		if (readpass(prompt, &passphrase, &pplen) < 0)
@@ -495,10 +488,19 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	if (rflag)
-		return pushkey(&s, sockp);
+	/* push the key to a running agent */
+	if (rflag) {
+		if (!sockp) {
+			fprintf(stderr, "SAFE_SOCK variable is not set\n");
+			return -1;
+		}
+		pushkey(&s, sockp);
+	}
 
 	secret = argv[0];
+
+	if (!secret)
+		return 0;
 
 	if (aflag) {
 		mkdir_p(dirname(secret), 0700);
