@@ -1,14 +1,4 @@
-CC = cc
-LD = $(CC)
-
-PREFIX = /usr/local
-MANPREFIX = ${PREFIX}/man
-
-CPPFLAGS = -I/usr/local/include
-CFLAGS = -Wall -Wextra -pedantic
-LDFLAGS = -L/usr/local/lib
-LDLIBS = -lsodium
-
+include config.mk
 all: safe safe-agent
 
 safe: safe.o readpassphrase.o
@@ -26,15 +16,15 @@ install: safe safe-agent
 	cp safe-agent ${DESTDIR}${PREFIX}/bin/safe-agent
 	chmod 755 ${DESTDIR}${PREFIX}/bin/safe
 	chmod 755 ${DESTDIR}${PREFIX}/bin/safe-agent
-	mkdir -p ${DESTDIR}${MANPREFIX}/man1
-	cp safe.1 ${DESTDIR}${MANPREFIX}/man1/safe.1
-	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe.1
-	cp safe-agent.1 ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
-	chmod 644 ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
+	mkdir -p ${DESTDIR}${MANDIR}/man1
+	cp safe.1 ${DESTDIR}${MANDIR}/man1/safe.1
+	chmod 644 ${DESTDIR}${MANDIR}/man1/safe.1
+	cp safe-agent.1 ${DESTDIR}${MANDIR}/man1/safe-agent.1
+	chmod 644 ${DESTDIR}${MANDIR}/man1/safe-agent.1
 
 
 uninstall:
 	rm ${DESTDIR}${PREFIX}/bin/safe
 	rm ${DESTDIR}${PREFIX}/bin/safe-agent
-	rm ${DESTDIR}${MANPREFIX}/man1/safe.1
-	rm ${DESTDIR}${MANPREFIX}/man1/safe-agent.1
+	rm ${DESTDIR}${MANDIR}/man1/safe.1
+	rm ${DESTDIR}${MANDIR}/man1/safe-agent.1
