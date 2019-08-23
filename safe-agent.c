@@ -18,6 +18,7 @@
 #include <sodium.h>
 
 #include "arg.h"
+#include "strlcpy.h"
 
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"
@@ -108,7 +109,7 @@ creatsock(char *sockpath)
 	umask(0177);
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
-	strcpy(addr.sun_path, sockpath);
+	strlcpy(addr.sun_path, sockpath, sizeof(addr.sun_path));
 
 	if (bind(sfd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
 		return -1;
@@ -216,7 +217,7 @@ int
 main(int argc, char *argv[])
 {
 	pid_t pid;
-	int timeout, fd, dflag;
+	int fd, timeout = 0, dflag = 0;
 	size_t dirlen;
 	char path[PATH_MAX] = SOCKDIR;
 	struct rlimit rlim;
@@ -241,7 +242,7 @@ main(int argc, char *argv[])
 	} ARGEND
 
 	if (sockp) {
-		strncpy(path, sockp, sizeof(path));
+		strlcpy(path, sockp, sizeof(path));
 	} else {
 		if (!mkdtemp(path))
 			err(1, "mkdtemp: %s", path);
