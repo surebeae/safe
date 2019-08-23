@@ -170,17 +170,22 @@ servekey(int timeout)
 
 	for (;;) {
 		pfd.fd = accept(sfd, NULL, NULL);
-		pfd.events = POLLIN|POLLOUT|POLLERR;
+		pfd.revents = 0;
+		pfd.events = POLLIN;
+
+		if (s.loaded)
+			pfd.events |= POLLOUT;
 
 		if (pfd.fd < 0)
 			err(1, "%s", sockp);
 
-		if ((r = poll(&pfd, 1, 0)) < 1)
+		if ((r = poll(&pfd, 1, 100)) < 0)
 			return r;
 
 		if (pfd.revents & POLLIN) {
 			if (verbose)
-				fprintf(stderr, "reading key from client\n");
+				fprintf(stderr, "reading key from client fd %d\n", pfd.fd);
+
 			n = xread(pfd.fd, s.saltkey, sizeof(s.saltkey));
 			if (n == sizeof(s.saltkey)) {
 				s.loaded = 1;
@@ -196,15 +201,12 @@ servekey(int timeout)
 					fprintf(stderr, "failed to load key in memory\n");
 			}
 		} else if (pfd.revents & POLLOUT) {
-			if (s.loaded) {
-				if (verbose)
-					fprintf(stderr, "sending key to client\n");
-				xwrite(pfd.fd, s.saltkey, sizeof(s.saltkey));
-			} else {
-				if (verbose)
-					fprintf(stderr, "no key loaded in memory\n");
-			}
+			if (verbose)
+				fprintf(stderr, "sending key to client fd %d\n", pfd.fd);
+
+			xwrite(pfd.fd, s.saltkey, sizeof(s.saltkey));
 		}
+
 		close(pfd.fd);
 	}
 
