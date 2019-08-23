@@ -212,7 +212,7 @@ servekey(int timeout)
 
 	/* NOTREACHED */
 	close(sfd);
-	return 0;
+	return -1;
 }
 
 int
