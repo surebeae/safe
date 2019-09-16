@@ -168,16 +168,10 @@ spawn_askpass(const char *askpass, const char *msg, char *buf, size_t bufsiz)
 }
 
 int
-readpass(const char *prompt, uint8_t **target, size_t *len)
+readpass(const char *prompt, uint8_t **target, size_t *len, int askflag)
 {
-	int ttyfd;
 	char pass[BUFSIZ], *askpass, *p;
-
-	/*
-	 * read passphrase from an ASKPASS program stdout if there is
-	 * no tty available
-	 */
-	if ((ttyfd = open(_PATH_TTY, O_RDWR)) < 0) {
+	if (askflag) {
 		askpass = ASKPASS;
 		if (getenv("SAFE_ASKPASS"))
 			askpass = getenv("SAFE_ASKPASS");
@@ -185,7 +179,6 @@ readpass(const char *prompt, uint8_t **target, size_t *len)
 		if (!p)
 			err(1, "askpass:");
 	} else {
-		close(ttyfd);
 		p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF|RPP_REQUIRE_TTY);
 		if (!p)
 			err(1, "readpassphrase:");
@@ -381,7 +374,7 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, haskey = 0, hasmaster = 1, aflag = 0, rflag = 0;
+	int fd, haskey = 0, hasmaster = 1, aflag = 0, rflag = 0, kflag = 0, ttyfd;
 	char *prompt, *secret, *sockp, *safe = SAFE;
 	struct safe s;
 	struct rlimit rlim;
@@ -402,6 +395,9 @@ main(int argc, char *argv[])
 		break;
 	case 's':
 		safe = EARGF(usage());
+		break;
+	case 'k':
+		kflag = 1;
 		break;
 	default:
 		usage();
@@ -438,8 +434,17 @@ main(int argc, char *argv[])
 	if (sockp && !readkey(&s, sockp))
 		haskey = 1;
 
+	/*
+	 * read passphrase from an ASKPASS program stdout if there is
+	 * no tty available
+	 */
+	if ((ttyfd = open(_PATH_TTY, O_RDWR)) < 0)
+		kflag = 1;
+	else
+		close(ttyfd);
+
 	if (!haskey) {
-		if (readpass(prompt, &passphrase, &pplen) < 0)
+		if (readpass(prompt, &passphrase, &pplen, kflag) < 0)
 			return -1;
 
 		sodium_mlock(passphrase, pplen);
@@ -450,7 +455,7 @@ main(int argc, char *argv[])
 			size_t pplen2 = 0;
 
 			/* input for master password again to check */
-			if (readpass("verify:", &passphrase2, &pplen2) < 0)
+			if (readpass("verify:", &passphrase2, &pplen2, kflag) < 0)
 				return -1;
 
 			sodium_mlock(passphrase2, pplen2);
