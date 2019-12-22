@@ -18,7 +18,10 @@
 #include <sodium.h>
 
 #include "arg.h"
-#include "strlcpy.h"
+
+#ifndef __OpenBSD__
+	#include "strlcpy.h"
+#endif
 
 #define SOCKDIR "/tmp/safe-XXXXXX"
 #define SOCKET  "agent"

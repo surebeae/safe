@@ -5,7 +5,7 @@ safe: safe.o readpassphrase.o
 	$(LD) -o $@ safe.o readpassphrase.o $(LDFLAGS) $(LDLIBS)
 
 safe-agent: safe-agent.o
-	$(LD) -o $@ $< $(LDFLAGS) $(LDLIBS)
+	$(LD) -o $@ safe-agent.o $(LDFLAGS) $(LDLIBS)
 
 clean:
 	rm -f *.o safe safe-agent
