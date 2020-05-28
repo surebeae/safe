@@ -1,101 +1,34 @@
-# safe
+safe
+====
+Password protected secret keeper.
 
-Store your secrets in an encrypted safe, protected by a password.
+Secrets are encrypted and stored on disk using a key derivated from your
+master password.  An agent can retain the key in memory so
+you don't have to type the password over and over.
 
-## examples
+Features
+-----
+- No keys to manage!
+- No other files than your secrets
+- Handle secrets of any size (stream encryption)
+- Agent-like capabilities
+- Support external askpass programs
 
-	# add a secret to your safe
-	safe -a my/deepest/secret < cute-kitten.gif
+Usage
+-----
+Refer to safe(1) manual page for details and examples.
+The below commands are provided as a quick introduction.
 
-	# retrieve a secret from your safe
-	safe my/deepest/secret
+	safe -a mysecret < secret.jpg  # store a secret
+	safe mysecret > secret.jpg     # retrieve a secret
+	find ${SAFE_DIR} -type f       # list existing secrets
 
-	# list all your secrets
-	find .secrets -type f
+Installation
+-----
+Edit config.mk if needed, then build with the following command:
 
-	# start a safe agent, export variables to the environment
-	# and push your key to it
-	eval $(safe-agent)
-	safe -r
+	make install
 
-	# have the agent forget the key
-	kill -USR1 $SAFE_PID
+Require [libsodium][0].
 
-
-## features
-
-+ Only require a master password to unlock
-+ Provide a way to open/lock the safe (agent)
-+ Store any kind of secret (stream encryption)
-
-## design
-
-Your safe is stored on disk as a directory tree, which location is set
-at compilation time (default: .secrets). This location can later be
-changed with the SAFE_DIR environment variable, or using the -s flag.
-
-	.secrets
-	.secrets/master
-	.secrets/webmail
-	.secrets/work/webmail
-	.secrets/work/master
-
-Each file represent a "secret" and is the concatenation of a salt and
-the data encrypted with this salt:
-
-                [16 bytes salt][encrypted data]
-
-Data is encrypted using the xchacha20[0] algorithm, using a key derived
-from your master password and a salt (stored along with your password).
-
-## "master" entry
-
-The safe uses one entry named "master" (set at compile time) as a
-reference for your master password + salt.
-This entry is automatically created when you add your first entry to
-the safe. It contains your master password and can be retrieved just
-like any other entry from the safe. The content is not used for anything
-though, so it could be anything.
-
-What's so special about this entry is that its salt is the reference salt
-for all secrets added after this one (which typically means: ALL OF THEM.)
-As this salt is used to derivate a key, it is really important not to
-loose it, so it is stored with all other passwords as well, in case you
-accidentaly remove the "master" entry from the safe.
-
-If it ever happens, you can easily recreate it with the following
-commands (assuming "foo" is a secret that was previously created using
-the lost master):
-	
-	ln .secrets/foo .secrets/master
-	echo "your master password" | pass -a master2
-	unlink .secrets/master
-	mv .secrets/master{2,}
-	chmod 400 .secrets/master
-
-Note that a safe without a "master" entry can easily be corrupted as it
-may end up with different keys used to encrypt your secret, so treat the
-"master" entry with respect :)
-
-## agent
-
-Typing your master password for each encryption/decryption is tedious,
-so the safe comes with a built-in agent that can save your key in memory,
-and serve it through a socket, so you don't have to type your password.
-
-Upon starting, the agent will output two shell variables:
-
-* SAFE_SOCK - containing the path to this agent's socket
-* SAFE_PID  - containing the PID of the currently started agent
-
-If you export these in your environment, later calls of safe(1) will
-use these variables to communicate with the agent and retrieve the key
-through the agent's socket.
-
-You can use the PID to kill the agent when you want to "lock" the safe.
-
-## license
-This software is licensed under the ISC license, see the LICENSE file
-provided.
-
-[0]: https://download.libsodium.org/doc/advanced/stream_ciphers/xchacha20
+[0]: https://libsodium.org
