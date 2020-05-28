@@ -1,0 +1,83 @@
+.Dd 2020-05-28
+.Dt SAFE-STORE 5
+.Os POSIX.1-2017
+
+.Sh NAME
+.Nm safe-store
+.Nd Encrypted file storage for your secrets.
+
+.Sh DESCRIPTION
+The
+.Nm
+is a directory containing encrypted files called
+.Em secrets .
+There can be any number of sub-directories in the
+.Nm ,
+in which case the secret shall be refered to by its path relative to the
+.Nm .
+
+.Bd -literal
+  $ find .secrets -type f
+  .secrets/master
+  .secrets/randomname
+  .secrets/subdir/name
+  .secrets/subdir/othername
+.Ed
+
+
+.Sh FILES
+.Bl -tag -width "/etc/mail/smtpd.confXXX" -compact
+.It Pa .secrets
+Default
+.Nm
+path
+.It Pa .secrets/cipher
+A random secret named "cipher"
+.It Pa .secrets/master
+A special secret used as a reference for salting and verifying the master password
+.El
+
+.Pa secrets
+are the concatenation of a 16 bytes
+.Em salt
+and arbitraty data encrypted
+using the
+.Em XChaCha20
+stream cipher.
+
+The key used for encryption is derived from a salt and a master
+password. Every secret is be encrypted using the same key.
+.Pp
+.Pa master
+is a special secret containing the master password.
+It is used to check the master password, and as a reference salt
+for new secrets. Its content is however never checked for, and could
+be anything, as long as it can be decrypted properly.
+
+.Sh SECURITY CONSIDERATIONS
+
+The master secret is used to check that your salt and master password
+are correct. If it is not absent, no secret can be decrypted, and the
+.Xr safe 1
+utility will generate a new salt and master entry. It means that all
+secrets created with a different salt will not be decrypted properly.
+.Pp
+To recover from a lost master secret, you can do the following (assuming that
+.Em random_entry
+is an existing secret):
+
+.Bd -literal
+  cd $SAFE_DIR
+  cp random_entry master
+  echo "your master password" | safe -a master.new
+  mv master.new master
+  chmod 400 master
+  safe master
+.Ed
+
+.Sh SEE ALSO
+.Xr safe 1 ,
+.Xr safe-agent 1
+
+.Sh AUTHORS
+.An Willy Goiffon Aq Mt dev@z3bra.org
