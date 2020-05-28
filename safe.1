@@ -68,22 +68,24 @@ correctly on the next calls.
 Do not delete this entry as it could lead to a corrupted safe.
 
 .Sh EXAMPLES
-.Bd -literal
 Store a secret in your safe
-
-	$ safe -a secret/file < kitten.gif
-
-List all secrets in $STORE (choose your weapon)
-
-	$ tree --noreport $STORE
-	$ find $STORE -type f
-	$ ls -R $STORE
-	$ tar -C $STORE -v -f /dev/null -c . | cut -d / -f 2-
-
+.Bd -literal
+  $ safe -a secret/file < kitten.gif
+.Ed
+.Pp
+List all secrets in $SAFE_DIR (choose your weapon)
+.Bd -literal
+  $ tree --noreport $SAFE_DIR
+  $ find $SAFE_DIR -type f
+  $ ls -R $SAFE_DIR
+  $ tar -C $SAFE_DIR -v -f /dev/null -c . | cut -d / -f 2-
+.Ed
+.Pp
 Retrieve a secret from your safe
-
-	$ safe secret/file > kitten.gif
-	password:
+.Bd -literal
+  $ safe secret/file > kitten.gif
+  password:
+.Ed
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"

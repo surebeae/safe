@@ -55,13 +55,13 @@ will use these environment variables internally to retrieve the key and
 use it to encrypt/decrypt the stored secrets.
 
 .Sh EXAMPLES
-.Bd -literal
 Retrieve a secret from your safe, using the agent
-
-	$ eval $(safe-agent)
-	$ safe -r
-	password:
-	$ safe secret/file > kitten.gif
+.Bd -literal
+  $ eval $(safe-agent)
+  $ safe -r
+  password:
+  $ safe secret/file > kitten.gif
+.Ed
 
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
@@ -70,6 +70,8 @@ Stores the PID of the currently running agent.
 .It Ev SAFE_SOCK
 Stores the path to the UNIX-domain socket used to communicate with
 the agent.
+.El
 
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org
+
