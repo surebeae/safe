@@ -1,11 +1,9 @@
 .Dd 2019-02-20
 .Dt SAFE 1
 .Os POSIX.1-2017
-
 .Sh NAME
 .Nm safe
 .Nd digital safe for your secrets
-
 .Sh SYNOPSIS
 .Nm
 .Op Fl hr
@@ -13,7 +11,6 @@
 .Op Fl s Ar safe
 .Op Fl a
 .Ar secret
-
 .Sh DESCRIPTION
 .Nm
 stores secrets (files) encrypted on your disk, and lets you retrieve them,
@@ -44,7 +41,6 @@ Encrypt stdin to your safe as
 .Ar secret .
 .It Fl k
 Prompt user for password using an external program (see: SAFE_ASKPASS).
-
 .Sh AGENT
 When the agent is started,
 .Nm
@@ -57,7 +53,6 @@ variable is set in the environment.
 When the agent is first started, you can push the key to it using the
 .Fl p
 flag.
-
 .Sh MASTER PASSWORD
 When you add your first secret to the safe, a
 .Ar master
@@ -66,7 +61,6 @@ password, and is used to check that you typed the master password
 correctly on the next calls.
 .Pp
 Do not delete this entry as it could lead to a corrupted safe.
-
 .Sh EXAMPLES
 Store a secret in your safe
 .Bd -literal
@@ -86,7 +80,6 @@ Retrieve a secret from your safe
   $ safe secret/file > kitten.gif
   password:
 .Ed
-
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
 .It Ev SAFE_DIR
@@ -96,10 +89,8 @@ Path to the UNIX-domain socket used to communicate with the agent.
 .It Ev SAFE_ASKPASS
 If no TTY is available, the program specified by this variable will be
 used to read the master password (default: thingaskpass)
-
 .Sh SEE ALSO
 .Xr safe-agent 1 ,
 .Xr safe-store 5
-
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org

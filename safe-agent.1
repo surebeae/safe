@@ -1,17 +1,14 @@
 .Dd 2019-06-08
 .Dt SAFE-AGENT 1
 .Os POSIX.1-2017
-
 .Sh NAME
 .Nm safe-agent
 .Nd decryption key agent
-
 .Sh SYNOPSIS
 .Nm
 .Op Fl hdv
 .Op Fl t Ar timeout
 .Op Fl f Ar socket
-
 .Sh DESCRIPTION
 .Nm
 can retain a derivated key and its salt in memroy, and send it over a
@@ -53,7 +50,6 @@ Later calls to
 .Xr safe 1
 will use these environment variables internally to retrieve the key and
 use it to encrypt/decrypt the stored secrets.
-
 .Sh EXAMPLES
 Retrieve a secret from your safe, using the agent
 .Bd -literal
@@ -62,7 +58,6 @@ Retrieve a secret from your safe, using the agent
   password:
   $ safe secret/file > kitten.gif
 .Ed
-
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
 .It Ev SAFE_PID
@@ -71,11 +66,9 @@ Stores the PID of the currently running agent.
 Stores the path to the UNIX-domain socket used to communicate with
 the agent.
 .El
-
 .Sh SEE ALSO
 .Xr safe 1
 .Xr safe-store 5
-
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org
 
