@@ -19,14 +19,21 @@ Usage
 Refer to safe(1) manual page for details and examples.
 The below commands are provided as a quick introduction.
 
-	safe -a mysecret < secret.jpg  # store a secret
-	safe mysecret > secret.jpg     # retrieve a secret
-	find ${SAFE_DIR} -type f       # list existing secrets
+This will store and retrieve a secret from the safe
+
+	safe -a mysecret < secret.jpg
+	safe mysecret > secret.jpg
+
+Secrets being standard files in $SAFE_DIR, you can list them using
+standard tools:
+
+	find ${SAFE_DIR} -type f
 
 Installation
 -----
-Edit config.mk if needed, then build with the following command:
+Edit config.mk as needed, then build/install with the following commands:
 
+	make
 	make install
 
 Require [libsodium][0].
