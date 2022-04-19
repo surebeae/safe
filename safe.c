@@ -42,7 +42,7 @@ char *argv0;
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-hr] [-s safe] [-p prompt] [[-a] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-hr] [-s safe] [-p prompt] [[-af] entry]\n", argv0);
 	exit(1);
 }
 
@@ -374,7 +374,8 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int fd, haskey = 0, hasmaster = 1, aflag = 0, rflag = 0, kflag = 0, ttyfd;
+	int aflag = 0, rflag = 0, kflag = 0, fflag = 0;
+	int fd, haskey = 0, hasmaster = 1, ttyfd;
 	char *prompt, *secret, *sockp, *safe = SAFE;
 	struct safe s;
 	struct rlimit rlim;
@@ -384,6 +385,9 @@ main(int argc, char *argv[])
 	prompt = "password:";
 
 	ARGBEGIN {
+	case 'f':
+		fflag = 1;
+		/* FALLTHROUGH */
 	case 'a':
 		aflag = 1;
 		break;
@@ -509,7 +513,9 @@ main(int argc, char *argv[])
 
 	if (aflag) {
 		mkdir_p(dirname(secret), 0700);
-		fd = open(secret, O_WRONLY | O_CREAT | O_EXCL, 0600);
+
+		/* Prevent overwriting unless fflag is set */
+		fd = open(secret, O_WRONLY | O_CREAT | (fflag ? 0 : O_EXCL), 0600);
 		if (fd < 0)
 			err(1, "%s", secret);
 

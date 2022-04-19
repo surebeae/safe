@@ -9,7 +9,7 @@
 .Op Fl hr
 .Op Fl p Ar prompt
 .Op Fl s Ar safe
-.Op Fl a
+.Op Fl af
 .Ar secret
 .Sh DESCRIPTION
 .Nm
@@ -39,6 +39,15 @@ Set the path to your safe as
 .It Fl a Ar secret
 Encrypt stdin to your safe as
 .Ar secret .
+Use
+.Fl f
+to overwrite an existing secret.
+.It Fl f
+Force writing to
+.Ar secret
+if it exists.
+Implies
+.Fl a .
 .It Fl k
 Prompt user for password using an external program (see: SAFE_ASKPASS).
 .Sh AGENT
