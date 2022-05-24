@@ -6,10 +6,10 @@
 .Nd digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl abfhr
+.Op Fl bhr
 .Op Fl p Ar prompt
 .Op Fl s Ar safe
-.Ar secret
+.Op Oo Fl af Oc Ar secret
 .Sh DESCRIPTION
 .Nm
 stores secrets (files) encrypted on your disk, and lets you retrieve them,
@@ -20,21 +20,6 @@ given that you have the right password.
 Decrypt file
 .Ar secret
 from your safe to stdout.
-.It Fl h
-Print a quick usage text.
-.It Fl r
-Remember the password. The variable
-.Ev SAFE_SOCK
-must be set and point to the UNIX-domain socket bound by a running agent
-(see AGENT).
-.It Fl p Ar prompt
-Prompt user for password using text
-.Ar prompt .
-(default: "password:")
-.It Fl s Ar safe
-Set the path to your safe as
-.Ar safe .
-(default: .secrets)
 .It Fl a Ar secret
 Encrypt stdin to your safe as
 .Ar secret .
@@ -49,8 +34,23 @@ Force writing to
 if it exists.
 Implies
 .Fl a .
+.It Fl h
+Print a quick usage text.
 .It Fl k
 Prompt user for password using an external program (see: SAFE_ASKPASS).
+.It Fl p Ar prompt
+Prompt user for password using text
+.Ar prompt .
+(default: "password:")
+.It Fl r
+Remember the password. The variable
+.Ev SAFE_SOCK
+must be set and point to the UNIX-domain socket bound by a running agent
+(see AGENT).
+.It Fl s Ar safe
+Set the path to your safe as
+.Ar safe .
+(default: .secrets)
 .Sh AGENT
 When the agent is started,
 .Nm
