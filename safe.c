@@ -42,7 +42,7 @@ char *argv0;
 void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-hr] [-s safe] [-p prompt] [[-af] entry]\n", argv0);
+	fprintf(stderr, "usage: %s [-bhr] [-s safe] [-p prompt] [[-af] entry]\n", argv0);
 	exit(1);
 }
 
@@ -168,7 +168,7 @@ spawn_askpass(const char *askpass, const char *msg, char *buf, size_t bufsiz)
 }
 
 int
-readpass(const char *prompt, uint8_t **target, size_t *len, int askflag)
+readpass(const char *prompt, uint8_t **target, size_t *len, int askflag, int stdinflag)
 {
 	char pass[BUFSIZ], *askpass, *p;
 	if (askflag) {
@@ -179,7 +179,10 @@ readpass(const char *prompt, uint8_t **target, size_t *len, int askflag)
 		if (!p)
 			err(1, "askpass:");
 	} else {
-		p = readpassphrase(prompt, pass, sizeof(pass), RPP_ECHO_OFF|RPP_REQUIRE_TTY);
+		int flags = 0;
+		flags |= RPP_ECHO_OFF;
+		flags |= stdinflag ? RPP_STDIN : RPP_REQUIRE_TTY;
+		p = readpassphrase(prompt, pass, sizeof(pass), flags);
 		if (!p)
 			err(1, "readpassphrase:");
 	}
@@ -374,7 +377,7 @@ readsecret(struct safe *s, int in, int out)
 int
 main(int argc, char *argv[])
 {
-	int aflag = 0, rflag = 0, kflag = 0, fflag = 0;
+	int aflag = 0, bflag = 0, rflag = 0, kflag = 0, fflag = 0;
 	int fd, haskey = 0, hasmaster = 1, ttyfd;
 	char *prompt, *secret, *sockp, *safe = SAFE;
 	struct safe s;
@@ -390,6 +393,9 @@ main(int argc, char *argv[])
 		/* FALLTHROUGH */
 	case 'a':
 		aflag = 1;
+		break;
+	case 'b':
+		bflag = 1;
 		break;
 	case 'p':
 		prompt = EARGF(usage());
@@ -448,7 +454,7 @@ main(int argc, char *argv[])
 		close(ttyfd);
 
 	if (!haskey) {
-		if (readpass(prompt, &passphrase, &pplen, kflag) < 0)
+		if (readpass(prompt, &passphrase, &pplen, kflag, bflag) < 0)
 			return -1;
 
 		sodium_mlock(passphrase, pplen);
@@ -459,7 +465,7 @@ main(int argc, char *argv[])
 			size_t pplen2 = 0;
 
 			/* input for master password again to check */
-			if (readpass("verify:", &passphrase2, &pplen2, kflag) < 0)
+			if (readpass("verify:", &passphrase2, &pplen2, kflag, bflag) < 0)
 				return -1;
 
 			sodium_mlock(passphrase2, pplen2);

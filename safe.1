@@ -6,10 +6,9 @@
 .Nd digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl hr
+.Op Fl abfhr
 .Op Fl p Ar prompt
 .Op Fl s Ar safe
-.Op Fl af
 .Ar secret
 .Sh DESCRIPTION
 .Nm
@@ -42,6 +41,8 @@ Encrypt stdin to your safe as
 Use
 .Fl f
 to overwrite an existing secret.
+.It Fl b
+Batch mode. Reads master password from stdin.
 .It Fl f
 Force writing to
 .Ar secret
