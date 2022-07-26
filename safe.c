@@ -20,10 +20,7 @@
 
 #include "arg.h"
 #include "readpassphrase.h"
-
-#define ASKPASS "thingaskpass"
-#define MASTER  "master"
-#define SAFE    ".secrets"
+#include "config.h"
 
 struct safe {
 	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
@@ -172,7 +169,7 @@ readpass(const char *prompt, uint8_t **target, size_t *len, int askflag, int std
 {
 	char pass[BUFSIZ], *askpass, *p;
 	if (askflag) {
-		askpass = ASKPASS;
+		askpass = askpass_path;
 		if (getenv("SAFE_ASKPASS"))
 			askpass = getenv("SAFE_ASKPASS");
 		p = spawn_askpass(askpass, prompt, pass, sizeof(pass));
@@ -379,7 +376,7 @@ main(int argc, char *argv[])
 {
 	int aflag = 0, bflag = 0, rflag = 0, kflag = 0, fflag = 0;
 	int fd, haskey = 0, hasmaster = 1, ttyfd;
-	char *prompt, *secret, *sockp, *safe = SAFE;
+	char *prompt, *secret, *sockp, *safe = safe_dir;
 	struct safe s;
 	struct rlimit rlim;
 
@@ -427,17 +424,17 @@ main(int argc, char *argv[])
 		err(1, "setrlimit RLIMIT_CORE");
 
 	if (!safe)
-		safe = SAFE;
+		safe = safe_dir;
 
 	mkdir(safe, 0700);
 	if (chdir(safe) < 0)
 		err(1, "chdir: %s", safe);
 
 	/* open master password as read only to retrieve salt */
-	fd = open(MASTER, O_RDONLY);
+	fd = open(master_entry, O_RDONLY);
 	if (fd < 0) {
 		if (errno != ENOENT)
-			err(1, "%s", MASTER);
+			err(1, "%s", master_entry);
 		hasmaster = 0;
 	}
 
@@ -476,9 +473,9 @@ main(int argc, char *argv[])
 			}
 			sodium_munlock(passphrase2, pplen2);
 
-			fd = open(MASTER, O_RDWR | O_CREAT | O_EXCL, 0600);
+			fd = open(master_entry, O_RDWR | O_CREAT | O_EXCL, 0600);
 			if (fd < 0)
-				err(1, "%s", MASTER);
+				err(1, "%s", master_entry);
 
 			randombytes_buf(s.salt, sizeof(s.salt));
 			deriv((char *)passphrase, &s);

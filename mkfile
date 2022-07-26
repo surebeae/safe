@@ -8,8 +8,11 @@ safe: safe.o readpassphrase.o
 safe-agent: safe-agent.o
 	$LD -o $target $prereq $LDFLAGS $LDLIBS
 
-%.o: %.c
+%.o: %.c config.h
 	$CC $CPPFLAGS $CFLAGS -c $stem.c
+
+config.h: config.def.h
+	cp $prereq $target
 
 clean:V:
 	rm -f *.o safe safe-agent

@@ -18,6 +18,7 @@
 #include <sodium.h>
 
 #include "arg.h"
+#include "config.h"
 
 #ifndef __OpenBSD__
 	#include "strlcpy.h"
@@ -224,10 +225,11 @@ main(int argc, char *argv[])
 	pid_t pid;
 	int fd, timeout = 0, dflag = 0;
 	size_t dirlen;
-	char path[PATH_MAX] = SOCKDIR;
+	char path[PATH_MAX];
 	struct rlimit rlim;
 
 	pid = getpid();
+	strlcpy(path, agent_socktmp, sizeof(path));
 
 	ARGBEGIN {
 	case 'd':
@@ -253,7 +255,7 @@ main(int argc, char *argv[])
 			err(1, "mkdtemp: %s", path);
 
 		dirlen = strnlen(path, sizeof(path));
-		snprintf(path + dirlen, PATH_MAX - dirlen, "/%s.%d", SOCKET, pid);
+		snprintf(path + dirlen, PATH_MAX - dirlen, agent_sockfmt, pid);
 		sockp = path;
 	}
 

@@ -1,11 +1,16 @@
 include config.mk
 all: safe safe-agent
 
+safe.o safe-agent.o: config.h
+
 safe: safe.o readpassphrase.o
 	$(LD) -o $@ safe.o readpassphrase.o $(LDFLAGS) $(LDLIBS)
 
 safe-agent: safe-agent.o
 	$(LD) -o $@ safe-agent.o $(LDFLAGS) $(LDLIBS)
+
+config.h: config.def.h
+	cp $< $@
 
 clean:
 	rm -f *.o safe safe-agent
