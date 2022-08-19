@@ -426,6 +426,13 @@ main(int argc, char *argv[])
 	if (!safe)
 		safe = safe_dir;
 
+#ifdef __OpenBSD__
+	unveil(safe, "rwc");
+	unveil(_PATH_TTY, "rw"); // needed for reading passwords
+	if (sockp)
+		unveil(sockp, "rw");
+#endif
+
 	mkdir(safe, 0700);
 	if (chdir(safe) < 0)
 		err(1, "chdir: %s", safe);
