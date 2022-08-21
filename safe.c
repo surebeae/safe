@@ -399,6 +399,9 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
+	if (!safe)
+		safe = safe_dir;
+
 	if (argc != 1 && !rflag)
 		usage();
 
@@ -418,21 +421,20 @@ main(int argc, char *argv[])
 		err(1, "setrlimit RLIMIT_CORE");
 #endif
 
-	if (!safe)
-		safe = safe_dir;
+	mkdir(safe, 0700);
 
 #ifdef __OpenBSD__
-	if (unveil(safe, "rwc") == -1)
-		err(1, "unveil %s", safe);
 	if (unveil(_PATH_TTY, "rw") == -1)
 		err(1, "unveil %s", _PATH_TTY);
+	if (unveil(safe, "rwc") == -1)
+		err(1, "unveil %s", safe);
 	if (sockp)
 		if (unveil(sockp, "rw") == -1)
 			err(1, "unveil %s", sockp);
+	if (pledge("stdio rpath wpath cpath unix tty", NULL) < 0)
+		err(1, "pledge");
 #endif
 
-
-	mkdir(safe, 0700);
 	if (chdir(safe) < 0)
 		err(1, "chdir: %s", safe);
 
