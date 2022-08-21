@@ -7,6 +7,7 @@
 #include <err.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <paths.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -23,9 +24,6 @@
 #ifndef __OpenBSD__
 	#include "strlcpy.h"
 #endif
-
-#define SOCKDIR "/tmp/safe-XXXXXX"
-#define SOCKET  "agent"
 
 struct safe {
 	int loaded;
@@ -292,8 +290,7 @@ main(int argc, char *argv[])
 	if (setsid() < 0)
 		err(1, "setsid");
 
-	chdir("/");
-	if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
+	if ((fd = open(_PATH_DEVNULL, O_RDWR, 0)) != -1) {
 		(void)dup2(fd, STDIN_FILENO);
 		(void)dup2(fd, STDOUT_FILENO);
 		(void)dup2(fd, STDERR_FILENO);
@@ -313,7 +310,6 @@ skip:
 
 	if (verbose)
 		fprintf(stderr, "locking key in memory\n");
-	sodium_mlock(s.saltkey, sizeof(s.saltkey));
 
 	return servekey(timeout);
 }
