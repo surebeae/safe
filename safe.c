@@ -458,38 +458,41 @@ main(int argc, char *argv[])
 	else
 		close(ttyfd);
 
+	/* write master password entry if not present */
+	if (!hasmaster) {
+		pplen = readpass(prompt, passphrase, sizeof(passphrase), kflag, bflag);
+		if (pplen < 0)
+			return -1;
+
+		/* input for master password again to check */
+		vplen = readpass("verify:", verifyphrase, sizeof(verifyphrase), kflag, bflag);
+		if (vplen < 0)
+			return -1;
+
+		if (pplen != vplen || memcmp(passphrase, verifyphrase, pplen)) {
+			fprintf(stderr, "password mismatch\n");
+			return -1;
+		}
+
+		fd = open(master_entry, O_RDWR | O_CREAT | O_EXCL, 0600);
+		if (fd < 0)
+			err(1, "%s", master_entry);
+
+		randombytes_buf(s.salt, sizeof(s.salt));
+		deriv((char *)passphrase, &s);
+
+		xwrite(fd, s.salt, sizeof(s.salt));
+		writepass(&s, passphrase, pplen, fd);
+		haskey = 1;
+	}
+
 	if (!haskey) {
 		pplen = readpass(prompt, passphrase, sizeof(passphrase), kflag, bflag);
 		if (pplen < 0)
 			return -1;
 
-		/* write master password entry if not present */
-		if (!hasmaster) {
-
-			/* input for master password again to check */
-			vplen = readpass("verify:", verifyphrase, sizeof(verifyphrase), kflag, bflag);
-			if (vplen < 0)
-				return -1;
-
-			if (pplen != vplen || memcmp(passphrase, verifyphrase, pplen)) {
-				fprintf(stderr, "password mismatch\n");
-				return -1;
-			}
-
-			fd = open(master_entry, O_RDWR | O_CREAT | O_EXCL, 0600);
-			if (fd < 0)
-				err(1, "%s", master_entry);
-
-			randombytes_buf(s.salt, sizeof(s.salt));
-			deriv((char *)passphrase, &s);
-
-			xwrite(fd, s.salt, sizeof(s.salt));
-			writepass(&s, passphrase, pplen, fd);
-		} else {
-			xread(fd, s.salt, sizeof(s.salt), NULL);
-			deriv(passphrase, &s);
-		}
-
+		xread(fd, s.salt, sizeof(s.salt), NULL);
+		deriv(passphrase, &s);
 		haskey = 1;
 	}
 
