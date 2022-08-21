@@ -245,6 +245,16 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
+	sodium_mlock(&s, sizeof(s));
+
+#ifndef _DEBUG
+	/* deny core dump as memory contains derivated key */
+	struct rlimit rlim;
+	rlim.rlim_cur = rlim.rlim_max = 0;
+	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
+		err(1, "setrlimit RLIMIT_CORE");
+#endif
+
 	if (sockp) {
 		strlcpy(path, sockp, sizeof(path));
 	} else {
@@ -256,12 +266,13 @@ main(int argc, char *argv[])
 		sockp = path;
 	}
 
-#ifndef _DEBUG
-	/* deny core dump as memory contains derivated key */
-	struct rlimit rlim;
-	rlim.rlim_cur = rlim.rlim_max = 0;
-	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
-		err(1, "setrlimit RLIMIT_CORE");
+#ifdef __OpenBSD__
+	if (unveil(_PATH_DEVNULL, "rw") == -1)
+		err(1, "unveil %s", _PATH_DEVNULL);
+	if (unveil(sockp, "c") == -1)
+		err(1, "unveil %s", sockp);
+	if (pledge("stdio unix proc cpath", NULL) == -1)
+		err(1, "pledge");
 #endif
 
 	if (dflag) {
