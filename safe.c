@@ -32,8 +32,7 @@ enum {
 	SAFE_FINAL = 1 << 2,
 };
 
-uint8_t *passphrase = NULL;
-size_t pplen = 0;
+uint8_t cleartext[BUFSIZ]; // Fixed-size memory chunk for decrypting messages. Suitable for sodium_mlock()
 char *argv0;
 
 void
@@ -165,36 +164,27 @@ spawn_askpass(const char *askpass, const char *msg, char *buf, size_t bufsiz)
 }
 
 int
-readpass(const char *prompt, uint8_t **target, size_t *len, int askflag, int stdinflag)
+readpass(const char *prompt, char *buf, size_t bufsiz, int askflag, int stdinflag)
 {
-	char pass[BUFSIZ], *askpass, *p;
+	char *askpass;
 	if (askflag) {
 		askpass = askpass_path;
 		if (getenv("SAFE_ASKPASS"))
 			askpass = getenv("SAFE_ASKPASS");
-		p = spawn_askpass(askpass, prompt, pass, sizeof(pass));
-		if (!p)
+		if (!spawn_askpass(askpass, prompt, buf, bufsiz))
 			err(1, "askpass:");
 	} else {
 		int flags = 0;
 		flags |= RPP_ECHO_OFF;
 		flags |= stdinflag ? RPP_STDIN : RPP_REQUIRE_TTY;
-		p = readpassphrase(prompt, pass, sizeof(pass), flags);
-		if (!p)
+		if (!readpassphrase(prompt, buf, bufsiz, flags))
 			err(1, "readpassphrase:");
 	}
 
-	if (p[0] == '\0')
+	if (buf[0] == '\0')
 		return -1;
 
-	*target = realloc(*target, strlen(p)); /* not null-terminated */
-	if (!*target)
-		err(1, "realloc:");
-
-	memcpy(*target, p, strlen(p));
-	*len = strlen(p);
-
-	return 0;
+	return strnlen(buf, bufsiz);
 }
 
 void
@@ -269,7 +259,7 @@ trydecrypt(struct safe *s, int fd)
 	int r = 0, eof = 0;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t m[BUFSIZ];
+	uint8_t *m = cleartext;
 	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
@@ -279,7 +269,6 @@ trydecrypt(struct safe *s, int fd)
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
 		return -1;
 
-	sodium_mlock(m, sizeof(m));
 	while ((n = xread(fd, c, sizeof(c), &eof)) > 0) {
 		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
 			r--;
@@ -287,12 +276,11 @@ trydecrypt(struct safe *s, int fd)
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
 			r--;
 	}
-	sodium_munlock(m, sizeof(m));
 	return r;
 }
 
 int
-writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
+writepass(struct safe *s, char *m, size_t mlen, int fd)
 {
 	uint8_t *c, h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
@@ -305,7 +293,7 @@ writepass(struct safe *s, uint8_t *m, size_t mlen, int fd)
 	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
 		return -1;
 
-	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
+	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, (uint8_t *)m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
 		return -1;
 
 	xwrite(fd, h, sizeof(h));
@@ -377,6 +365,8 @@ main(int argc, char *argv[])
 	int aflag = 0, bflag = 0, rflag = 0, kflag = 0, fflag = 0;
 	int fd, haskey = 0, hasmaster = 1, ttyfd;
 	char *prompt, *secret, *sockp, *safe = safe_dir;
+	char passphrase[BUFSIZ], verifyphrase[BUFSIZ];
+	ssize_t pplen, vplen = 0;
 	struct safe s;
 	struct rlimit rlim;
 
@@ -416,7 +406,10 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
-	sodium_mlock(s.key, sizeof(s.key));
+	sodium_mlock(&s, sizeof(s));
+	sodium_mlock(&cleartext, sizeof(cleartext));
+	sodium_mlock(&passphrase, sizeof(passphrase));
+	sodium_mlock(&verifyphrase, sizeof(verifyphrase));
 
 	/* deny core dump as memory contains passwords and keys */
 	rlim.rlim_cur = rlim.rlim_max = 0;
@@ -462,27 +455,22 @@ main(int argc, char *argv[])
 		close(ttyfd);
 
 	if (!haskey) {
-		if (readpass(prompt, &passphrase, &pplen, kflag, bflag) < 0)
+		pplen = readpass(prompt, passphrase, sizeof(passphrase), kflag, bflag);
+		if (pplen < 0)
 			return -1;
-
-		sodium_mlock(passphrase, pplen);
 
 		/* write master password entry if not present */
 		if (!hasmaster) {
-			uint8_t *passphrase2 = NULL;
-			size_t pplen2 = 0;
 
 			/* input for master password again to check */
-			if (readpass("verify:", &passphrase2, &pplen2, kflag, bflag) < 0)
+			vplen = readpass("verify:", verifyphrase, sizeof(verifyphrase), kflag, bflag);
+			if (vplen < 0)
 				return -1;
 
-			sodium_mlock(passphrase2, pplen2);
-
-			if (pplen != pplen2 || memcmp(passphrase, passphrase2, pplen)) {
+			if (pplen != vplen || memcmp(passphrase, verifyphrase, pplen)) {
 				fprintf(stderr, "password mismatch\n");
 				return -1;
 			}
-			sodium_munlock(passphrase2, pplen2);
 
 			fd = open(master_entry, O_RDWR | O_CREAT | O_EXCL, 0600);
 			if (fd < 0)
@@ -495,10 +483,9 @@ main(int argc, char *argv[])
 			writepass(&s, passphrase, pplen, fd);
 		} else {
 			xread(fd, s.salt, sizeof(s.salt), NULL);
-			deriv((char *)passphrase, &s);
+			deriv(passphrase, &s);
 		}
 
-		sodium_munlock(passphrase, pplen);
 		haskey = 1;
 	}
 
@@ -547,7 +534,10 @@ main(int argc, char *argv[])
 		close(fd);
 	}
 
-	sodium_munlock(s.key, sizeof(s.key));
+	sodium_memzero(&s, sizeof(s));
+	sodium_memzero(&cleartext, sizeof(cleartext));
+	sodium_memzero(&passphrase, sizeof(passphrase));
+	sodium_memzero(&verifyphrase, sizeof(verifyphrase));
 
 	return 0;
 }
