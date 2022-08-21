@@ -368,7 +368,6 @@ main(int argc, char *argv[])
 	char passphrase[BUFSIZ], verifyphrase[BUFSIZ];
 	ssize_t pplen, vplen = 0;
 	struct safe s;
-	struct rlimit rlim;
 
 	safe   = getenv("SAFE_DIR");
 	sockp  = getenv("SAFE_SOCK");
@@ -411,10 +410,13 @@ main(int argc, char *argv[])
 	sodium_mlock(&passphrase, sizeof(passphrase));
 	sodium_mlock(&verifyphrase, sizeof(verifyphrase));
 
+#ifndef _DEBUG
 	/* deny core dump as memory contains passwords and keys */
+	struct rlimit rlim;
 	rlim.rlim_cur = rlim.rlim_max = 0;
 	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
 		err(1, "setrlimit RLIMIT_CORE");
+#endif
 
 	if (!safe)
 		safe = safe_dir;

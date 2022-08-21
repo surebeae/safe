@@ -226,7 +226,6 @@ main(int argc, char *argv[])
 	int fd, timeout = 0, dflag = 0;
 	size_t dirlen;
 	char path[PATH_MAX];
-	struct rlimit rlim;
 
 	pid = getpid();
 	strlcpy(path, agent_socktmp, sizeof(path));
@@ -259,10 +258,13 @@ main(int argc, char *argv[])
 		sockp = path;
 	}
 
+#ifndef _DEBUG
 	/* deny core dump as memory contains derivated key */
+	struct rlimit rlim;
 	rlim.rlim_cur = rlim.rlim_max = 0;
 	if (setrlimit(RLIMIT_CORE, &rlim) < 0)
 		err(1, "setrlimit RLIMIT_CORE");
+#endif
 
 	if (dflag) {
 		printf("SAFE_PID=%d; export SAFE_PID\n", pid);
