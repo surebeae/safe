@@ -13,6 +13,7 @@ Features
 - Handle secrets of any size (stream encryption)
 - Agent-like capabilities
 - Support external askpass programs
+- Encrypt secrets in [cream][0] format
 
 Usage
 -----
@@ -36,6 +37,7 @@ Edit config.mk as needed, then build/install with the following commands:
 	make
 	make install
 
-Require [libsodium][0].
+Require [libsodium][1].
 
-[0]: https://libsodium.org
+[0]: https://z3bra.org/cream
+[1]: https://libsodium.org
