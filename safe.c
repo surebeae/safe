@@ -1,3 +1,4 @@
+#include <netinet/in.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -22,9 +23,28 @@
 #include "readpassphrase.h"
 #include "config.h"
 
+struct crypto {
+        uint8_t  magic[6];
+        uint16_t version;
+        uint32_t xchacha20poly1305_bufsiz;
+        uint32_t argon2id_memory;
+        uint32_t argon2id_time;
+        uint32_t argon2id_threads;
+	uint8_t  salt[crypto_pwhash_SALTBYTES];
+};
+
+struct crypto crypto_defaults = {
+	.magic = {'C','R','E','A','M','\1'},
+	.version = 0x10,
+	.xchacha20poly1305_bufsiz = BUFSIZ, /* must match size in readsecret() and writesecret() */
+	.argon2id_memory          = 64*1024,
+	.argon2id_time            = 3,
+	.argon2id_threads         = 1, /* hardcoded in libsodium */
+};
+
 struct safe {
 	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
-	uint8_t salt[crypto_pwhash_SALTBYTES];
+	struct crypto crypto;
 };
 
 enum {
@@ -191,9 +211,9 @@ void
 deriv(char *pw, struct safe *s)
 {
 	if (crypto_pwhash(s->key, sizeof(s->key), pw, strlen(pw),
-			s->salt, crypto_pwhash_OPSLIMIT_INTERACTIVE,
-			crypto_pwhash_MEMLIMIT_INTERACTIVE,
-			crypto_pwhash_ALG_DEFAULT))
+			s->crypto.salt, s->crypto.argon2id_time,
+			s->crypto.argon2id_memory * 1024,
+			crypto_pwhash_ALG_ARGON2ID13))
 		err(1, "crypto_pwhash:");
 }
 
@@ -212,7 +232,7 @@ pushkey(struct safe *s, char *path)
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		return -1;
 
-	if (xwrite(sfd, s->salt, sizeof(s->salt)) < 0)
+	if (xwrite(sfd, s->crypto.salt, sizeof(s->crypto.salt)) < 0)
 		return -1;
 
 	if (write(sfd, s->key, sizeof(s->key)) < 0)
@@ -239,7 +259,7 @@ readkey(struct safe *s, char *path)
 	if (connect(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		goto err;
 
-	if ((n = xread(sfd, s->salt, sizeof(s->salt), NULL)) <= 0)
+	if ((n = xread(sfd, &s->crypto.salt, sizeof(s->crypto.salt), NULL)) <= 0)
 		goto err;
 
 	if (xread(sfd, s->key, sizeof(s->key), NULL) < 0)
@@ -277,6 +297,44 @@ trydecrypt(struct safe *s, int fd)
 			r--;
 	}
 	return r;
+}
+
+int
+readheader(int fd, struct crypto *hdr)
+{
+	uint8_t buf[40];
+	uint16_t s;
+	uint32_t l;
+
+	xread(fd, buf, sizeof(buf), NULL);
+
+        memcpy(hdr->magic, buf +  0, 6);
+	memcpy(&s, buf +  6, 2); hdr->version = ntohs(s);
+	memcpy(&l, buf +  8, 4); hdr->xchacha20poly1305_bufsiz = ntohl(l);
+	memcpy(&l, buf + 12, 4); hdr->argon2id_memory = ntohl(l);
+	memcpy(&l, buf + 16, 4); hdr->argon2id_time = ntohl(l);
+	memcpy(&l, buf + 20, 4); hdr->argon2id_threads = ntohl(l);
+	memcpy(hdr->salt, buf + 24, 16);
+
+	return 0;
+}
+
+int
+writeheader(int fd, struct crypto hdr)
+{
+	uint8_t buf[40];
+	uint16_t s;
+	uint32_t l;
+
+        memcpy(buf +  0, hdr.magic, 6);
+        s = htons(hdr.version);                  memcpy(buf +  6, (uint8_t *) &s, 2);
+        l = htonl(hdr.xchacha20poly1305_bufsiz); memcpy(buf +  8, (uint8_t *) &l, 4);
+        l = htonl(hdr.argon2id_memory);          memcpy(buf + 12, (uint8_t *) &l, 4);
+        l = htonl(hdr.argon2id_time);            memcpy(buf + 16, (uint8_t *) &l, 4);
+        l = htonl(hdr.argon2id_threads);         memcpy(buf + 20, (uint8_t *) &l, 4);
+	memcpy(buf + 24, hdr.salt, 16);
+
+	return xwrite(fd, buf, sizeof(buf));
 }
 
 int
@@ -372,6 +430,9 @@ main(int argc, char *argv[])
 	safe   = getenv("SAFE_DIR");
 	sockp  = getenv("SAFE_SOCK");
 	prompt = "password:";
+
+	/* set default cream parameters */
+	memcpy(&s.crypto, &crypto_defaults, sizeof(s.crypto));
 
 	ARGBEGIN {
 	case 'f':
@@ -478,10 +539,10 @@ main(int argc, char *argv[])
 		if (fd < 0)
 			err(1, "%s", master_entry);
 
-		randombytes_buf(s.salt, sizeof(s.salt));
+		randombytes_buf(s.crypto.salt, sizeof(s.crypto.salt));
 		deriv((char *)passphrase, &s);
 
-		xwrite(fd, s.salt, sizeof(s.salt));
+		writeheader(fd, s.crypto);
 		writepass(&s, passphrase, pplen, fd);
 		haskey = 1;
 	}
@@ -491,13 +552,14 @@ main(int argc, char *argv[])
 		if (pplen < 0)
 			return -1;
 
-		xread(fd, s.salt, sizeof(s.salt), NULL);
+		//xread(fd, &s.crypto, sizeof(s.crypto), NULL);
+		readheader(fd, &s.crypto);
 		deriv(passphrase, &s);
 		haskey = 1;
 	}
 
 	/* try to decrypt master password first, to ensure passphrase match */
-	lseek(fd, sizeof(s.salt), SEEK_SET);
+	lseek(fd, sizeof(s.crypto), SEEK_SET);
 	if (trydecrypt(&s, fd) < 0) {
 		fprintf(stderr, "incorrect master password\n");
 		close(fd);
@@ -527,7 +589,7 @@ main(int argc, char *argv[])
 		if (fd < 0)
 			err(1, "%s", secret);
 
-		xwrite(fd, s.salt, sizeof(s.salt));
+		writeheader(fd, s.crypto);
 		writesecret(&s, STDIN_FILENO, fd);
 		close(fd);
 	} else {
@@ -536,7 +598,7 @@ main(int argc, char *argv[])
 			err(1, "%s", secret);
 
 		/* Read salt from the beginning of the file */
-		lseek(fd, sizeof(s.salt), SEEK_SET);
+		lseek(fd, sizeof(s.crypto), SEEK_SET);
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
