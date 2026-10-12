@@ -289,23 +289,29 @@ trydecrypt(struct safe *s, int fd)
 	int r = 0, eof = 0;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t *m = cleartext;
-	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t *c, *m;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long mlen;
+	unsigned long long clen, mlen;
+
+	mlen = s->crypto.xchacha20poly1305_bufsiz;
+	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
+
+	m = xmalloc(mlen); sodium_mlock(m, mlen);
+	c = xmalloc(clen); sodium_mlock(c, clen);
 
 	xread(fd, h, sizeof(h), NULL);
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
 		return -1;
 
-	while ((n = xread(fd, c, sizeof(c), &eof)) > 0) {
+	while ((n = xread(fd, c, clen, &eof)) > 0) {
 		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
 			r--;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
 			r--;
 	}
+	sodium_memzero(m, s->crypto.xchacha20poly1305_bufsiz);
 	return r;
 }
 
@@ -378,25 +384,38 @@ writesecret(struct safe *s, int in, int out)
 	int eof;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t m[BUFSIZ];
-	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t *m, *c;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long clen;
+	unsigned long long clen, mlen;
+
+	mlen = s->crypto.xchacha20poly1305_bufsiz;
+	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
+
+	m = xmalloc(mlen); sodium_mlock(m, mlen);
+	c = xmalloc(clen); sodium_mlock(c, clen);
 
 	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
-		return -1;
+		goto err_wr;
 
 	xwrite(out, h, sizeof(h));
 
-	while ((n = xread(in, m, sizeof(m), &eof)) > 0) {
+	while ((n = xread(in, m, mlen, &eof)) > 0) {
 		tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
 		if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, n, NULL, 0, tag))
-			return -1;
+			goto err_wr;
 
 		xwrite(out, c, clen);
 	}
+
+	free(m);
+	free(c);
 	return 0;
+
+err_wr:
+	free(m);
+	free(c);
+	return -1;
 }
 
 int
@@ -405,26 +424,40 @@ readsecret(struct safe *s, int in, int out)
 	int eof = 0;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t m[BUFSIZ];
-	uint8_t c[BUFSIZ + crypto_secretstream_xchacha20poly1305_ABYTES];
+	uint8_t *m, *c;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long mlen;
+	unsigned long long clen, mlen;
+
+	mlen = s->crypto.xchacha20poly1305_bufsiz;
+	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
+
+	m = xmalloc(mlen); sodium_mlock(m, mlen);
+	c = xmalloc(clen); sodium_mlock(c, clen);
 
 	xread(in, h, sizeof(h), NULL);
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
-		return -1;
+		goto err_rd;
 
-	while ((n = xread(in, c, sizeof(c), &eof)) > 0) {
+	while ((n = xread(in, c, clen, &eof)) > 0) {
 		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
-			return -1;
+			goto err_rd;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
-			return -1;
+			goto err_rd;
 
 		xwrite(out, m, mlen);
 	}
+
+	sodium_memzero(m, s->crypto.xchacha20poly1305_bufsiz);
+	free(m);
+	free(c);
 	return 0;
+
+err_rd:
+	free(m);
+	free(c);
+	return -1;
 }
 
 int
