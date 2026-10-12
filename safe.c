@@ -52,7 +52,6 @@ enum {
 	SAFE_FINAL = 1 << 2,
 };
 
-uint8_t cleartext[BUFSIZ]; // Fixed-size memory chunk for decrypting messages. Suitable for sodium_mlock()
 char *argv0;
 
 void
@@ -513,7 +512,6 @@ main(int argc, char *argv[])
 		return -1;
 
 	sodium_mlock(&s, sizeof(s));
-	sodium_mlock(&cleartext, sizeof(cleartext));
 	sodium_mlock(&passphrase, sizeof(passphrase));
 	sodium_mlock(&verifyphrase, sizeof(verifyphrase));
 
@@ -647,7 +645,6 @@ main(int argc, char *argv[])
 	}
 
 	sodium_memzero(&s, sizeof(s));
-	sodium_memzero(&cleartext, sizeof(cleartext));
 	sodium_memzero(&passphrase, sizeof(passphrase));
 	sodium_memzero(&verifyphrase, sizeof(verifyphrase));
 
