@@ -352,6 +352,12 @@ writeheader(int fd, struct crypto hdr)
 	return xwrite(fd, buf, sizeof(buf));
 }
 
+/*
+ * This is only used to encrypt the master password when initializing
+ * a new safe. Assumes mlen ⇐ xchacha20poly1305_bufsiz, which should
+ * be the case as all buffers are initialized to the same length by
+ * default (BUF_SIZ).
+ */
 int
 writepass(struct safe *s, char *m, size_t mlen, int fd)
 {
@@ -359,15 +365,20 @@ writepass(struct safe *s, char *m, size_t mlen, int fd)
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long clen;
 
-	c = malloc(mlen + crypto_secretstream_xchacha20poly1305_ABYTES);
-	if (!c)
-		err(1, "malloc");
-
-	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
+	if (mlen > s->crypto.xchacha20poly1305_bufsiz)
 		return -1;
 
-	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, (uint8_t *)m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
+	c = xmalloc(mlen + crypto_secretstream_xchacha20poly1305_ABYTES);
+
+	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key)) {
+		free(c);
 		return -1;
+	}
+
+	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, (uint8_t *)m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL)) {
+		free(c);
+		return -1;
+	}
 
 	xwrite(fd, h, sizeof(h));
 	xwrite(fd, c, clen);
