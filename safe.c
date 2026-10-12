@@ -98,6 +98,16 @@ mkdir_p(char *path, mode_t mode)
 	return mkdir(tmp, mode);
 }
 
+void *
+xmalloc(size_t sz)
+{
+	void *b = NULL;
+	b = malloc(sz);
+	if (!b)
+		err(1, "malloc");
+	return b;
+}
+
 ssize_t
 xread(int fd, void *buf, size_t nbytes, int *eof)
 {
