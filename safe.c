@@ -104,16 +104,6 @@ mkdir_p(char *path, mode_t mode)
 	return mkdir(tmp, mode);
 }
 
-void *
-xmalloc(size_t sz)
-{
-	void *b = NULL;
-	b = malloc(sz);
-	if (!b)
-		err(1, "malloc");
-	return b;
-}
-
 ssize_t
 xread(int fd, void *buf, size_t nbytes, int *eof)
 {
@@ -160,8 +150,10 @@ xwrite(int fd, const void *buf, size_t nbytes)
 struct safe_buffer *
 safe_alloc(struct safe_buffer *b, ssize_t nbytes)
 {
-	b->buf = xmalloc(nbytes);
 	b->sz = nbytes;
+	b->buf = malloc(nbytes);
+	if (!b->buf)
+		err(1, "malloc");
 	sodium_mlock(b->buf, b->sz);
 	return b;
 }
@@ -508,6 +500,8 @@ main(int argc, char *argv[])
 	sodium_mlock(&s, sizeof(s));
 	sodium_mlock(&passphrase, sizeof(passphrase));
 	sodium_mlock(&verifyphrase, sizeof(verifyphrase));
+	safe_alloc(&s.message, s.crypto.xchacha20poly1305_bufsiz);
+	safe_alloc(&s.cipher, s.crypto.xchacha20poly1305_bufsiz + crypto_secretstream_xchacha20poly1305_ABYTES);
 
 #ifndef _DEBUG
 	/* deny core dump as memory contains passwords and keys */
@@ -591,9 +585,6 @@ main(int argc, char *argv[])
 		deriv(passphrase, &s);
 		haskey = 1;
 	}
-
-	safe_alloc(&s.message, s.crypto.xchacha20poly1305_bufsiz);
-	safe_alloc(&s.cipher, s.crypto.xchacha20poly1305_bufsiz + crypto_secretstream_xchacha20poly1305_ABYTES);
 
 	/* try to decrypt master password first, to ensure passphrase match */
 	lseek(fd, sizeof(s.crypto), SEEK_SET);
