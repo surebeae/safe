@@ -253,7 +253,7 @@ pushkey(struct safe *s, char *path)
 	struct sockaddr_un addr;
 
 	addr.sun_family = AF_UNIX;
-	strcpy(addr.sun_path, path);
+	strlcpy(addr.sun_path, path, sizeof(addr.sun_path));
 
 	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
@@ -280,7 +280,7 @@ readkey(struct safe *s, char *path)
 	struct sockaddr_un addr;
 
 	addr.sun_family = AF_UNIX;
-	strcpy(addr.sun_path, path);
+	strlcpy(addr.sun_path, path, sizeof(addr.sun_path));
 
 	if ((sfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
