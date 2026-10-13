@@ -23,6 +23,11 @@
 #include "readpassphrase.h"
 #include "config.h"
 
+struct safe_buffer {
+	ssize_t sz;
+	uint8_t *buf;
+};
+
 struct crypto {
         uint8_t  magic[6];
         uint16_t version;
@@ -45,6 +50,8 @@ struct crypto crypto_defaults = {
 struct safe {
 	uint8_t key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
 	struct crypto crypto;
+	struct safe_buffer cipher;
+	struct safe_buffer message;
 };
 
 enum {
@@ -148,6 +155,27 @@ xwrite(int fd, const void *buf, size_t nbytes)
 		nbytes -= n;
 	}
 	return total;
+}
+
+struct safe_buffer *
+safe_alloc(struct safe_buffer *b, ssize_t nbytes)
+{
+	b->buf = xmalloc(nbytes);
+	b->sz = nbytes;
+	sodium_mlock(b->buf, b->sz);
+	return b;
+}
+
+void
+safe_release(struct safe_buffer *b)
+{
+	if (!b)
+		return;
+
+	sodium_memzero(b->buf, b->sz);
+	free(b->buf);
+	b->buf = NULL;
+	b->sz = 0;
 }
 
 char *
@@ -288,23 +316,17 @@ trydecrypt(struct safe *s, int fd)
 	int r = 0, eof = 0;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t *c, *m;
+	uint8_t *c = s->cipher.buf;
+	uint8_t *m = s->message.buf;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long clen, mlen;
-
-	mlen = s->crypto.xchacha20poly1305_bufsiz;
-	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
-
-	m = xmalloc(mlen); sodium_mlock(m, mlen);
-	c = xmalloc(clen); sodium_mlock(c, clen);
 
 	xread(fd, h, sizeof(h), NULL);
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
 		return -1;
 
-	while ((n = xread(fd, c, clen, &eof)) > 0) {
-		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
+	while ((n = xread(fd, c, s->cipher.sz, &eof)) > 0) {
+		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, NULL, &tag, c, n, NULL, 0))
 			r--;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
@@ -361,29 +383,21 @@ writeheader(int fd, struct crypto hdr)
 int
 writepass(struct safe *s, char *m, size_t mlen, int fd)
 {
-	uint8_t *c, h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
 	unsigned long long clen;
 
 	if (mlen > s->crypto.xchacha20poly1305_bufsiz)
 		return -1;
 
-	c = xmalloc(mlen + crypto_secretstream_xchacha20poly1305_ABYTES);
-
-	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key)) {
-		free(c);
+	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
 		return -1;
-	}
 
-	if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, (uint8_t *)m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL)) {
-		free(c);
+	if (crypto_secretstream_xchacha20poly1305_push(&st, s->cipher.buf, &clen, (uint8_t *)m, mlen, NULL, 0, crypto_secretstream_xchacha20poly1305_TAG_FINAL))
 		return -1;
-	}
 
 	xwrite(fd, h, sizeof(h));
-	xwrite(fd, c, clen);
-
-	free(c);
+	xwrite(fd, s->cipher.buf, clen);
 
 	return 0;
 }
@@ -394,38 +408,23 @@ writesecret(struct safe *s, int in, int out)
 	int eof;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t *m, *c;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long clen, mlen;
-
-	mlen = s->crypto.xchacha20poly1305_bufsiz;
-	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
-
-	m = xmalloc(mlen); sodium_mlock(m, mlen);
-	c = xmalloc(clen); sodium_mlock(c, clen);
+	unsigned long long clen;
 
 	if (crypto_secretstream_xchacha20poly1305_init_push(&st, h, s->key))
-		goto err_wr;
+		return -1;
 
 	xwrite(out, h, sizeof(h));
 
-	while ((n = xread(in, m, mlen, &eof)) > 0) {
+	while ((n = xread(in, s->message.buf, s->message.sz, &eof)) > 0) {
 		tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
-		if (crypto_secretstream_xchacha20poly1305_push(&st, c, &clen, m, n, NULL, 0, tag))
-			goto err_wr;
+		if (crypto_secretstream_xchacha20poly1305_push(&st, s->cipher.buf, &clen, s->message.buf, n, NULL, 0, tag))
+			return -1;
 
-		xwrite(out, c, clen);
+		xwrite(out, s->cipher.buf, clen);
 	}
-
-	free(m);
-	free(c);
 	return 0;
-
-err_wr:
-	free(m);
-	free(c);
-	return -1;
 }
 
 int
@@ -434,40 +433,24 @@ readsecret(struct safe *s, int in, int out)
 	int eof = 0;
 	ssize_t n;
 	uint8_t tag;
-	uint8_t *m, *c;
 	uint8_t h[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 	crypto_secretstream_xchacha20poly1305_state st;
-	unsigned long long clen, mlen;
-
-	mlen = s->crypto.xchacha20poly1305_bufsiz;
-	clen = mlen + crypto_secretstream_xchacha20poly1305_ABYTES;
-
-	m = xmalloc(mlen); sodium_mlock(m, mlen);
-	c = xmalloc(clen); sodium_mlock(c, clen);
+	unsigned long long mlen;
 
 	xread(in, h, sizeof(h), NULL);
 	if (crypto_secretstream_xchacha20poly1305_init_pull(&st, h, s->key))
-		goto err_rd;
+		return -1;
 
-	while ((n = xread(in, c, clen, &eof)) > 0) {
-		if (crypto_secretstream_xchacha20poly1305_pull(&st, m, &mlen, &tag, c, n, NULL, 0))
-			goto err_rd;
+	while ((n = xread(in, s->cipher.buf, s->cipher.sz, &eof)) > 0) {
+		if (crypto_secretstream_xchacha20poly1305_pull(&st, s->message.buf, &mlen, &tag, s->cipher.buf, n, NULL, 0))
+			return -1;
 
 		if (eof && tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL)
-			goto err_rd;
+			return -1;
 
-		xwrite(out, m, mlen);
+		xwrite(out, s->message.buf, mlen);
 	}
-
-	sodium_memzero(m, s->crypto.xchacha20poly1305_bufsiz);
-	free(m);
-	free(c);
 	return 0;
-
-err_rd:
-	free(m);
-	free(c);
-	return -1;
 }
 
 int
@@ -604,11 +587,13 @@ main(int argc, char *argv[])
 		if (pplen < 0)
 			return -1;
 
-		//xread(fd, &s.crypto, sizeof(s.crypto), NULL);
 		readheader(fd, &s.crypto);
 		deriv(passphrase, &s);
 		haskey = 1;
 	}
+
+	safe_alloc(&s.message, s.crypto.xchacha20poly1305_bufsiz);
+	safe_alloc(&s.cipher, s.crypto.xchacha20poly1305_bufsiz + crypto_secretstream_xchacha20poly1305_ABYTES);
 
 	/* try to decrypt master password first, to ensure passphrase match */
 	lseek(fd, sizeof(s.crypto), SEEK_SET);
@@ -658,6 +643,8 @@ main(int argc, char *argv[])
 	sodium_memzero(&s, sizeof(s));
 	sodium_memzero(&passphrase, sizeof(passphrase));
 	sodium_memzero(&verifyphrase, sizeof(verifyphrase));
+	safe_release(&s.message);
+	safe_release(&s.cipher);
 
 	return 0;
 }
