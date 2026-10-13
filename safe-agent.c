@@ -123,7 +123,7 @@ creatsock(char *sockpath)
 }
 
 void
-forgetkey()
+forgetkey(void)
 {
 	sodium_memzero(s.saltkey, sizeof(s.saltkey));
 	s.loaded = 0;
