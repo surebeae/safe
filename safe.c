@@ -625,8 +625,8 @@ main(int argc, char *argv[])
 		if (fd < 0)
 			err(1, "%s", secret);
 
-		/* Read salt from the beginning of the file */
-		lseek(fd, sizeof(s.crypto), SEEK_SET);
+		/* Grab header from secret (in case of a different block size) */
+		readheader(fd, &s.crypto);
 		readsecret(&s, fd, STDOUT_FILENO);
 		close(fd);
 	}
