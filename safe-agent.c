@@ -21,9 +21,7 @@
 #include "arg.h"
 #include "config.h"
 
-#ifndef __OpenBSD__
-	#include "strlcpy.h"
-#endif
+#define _POSIX_C_SOURCE 202405L
 
 struct safe {
 	int loaded;
