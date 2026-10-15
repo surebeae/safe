@@ -137,11 +137,8 @@ sighandler(int signal)
 	case SIGINT:
 	case SIGTERM:
 		if (verbose)
-			fprintf(stderr, "unlocking key from memory\n");
-		sodium_munlock(s.saltkey, sizeof(s.saltkey));
-
-		if (verbose)
 			fprintf(stderr, "removing socket %s\n", sockp);
+		forgetkey();
 		unlink(sockp);
 		rmdir(dirname(sockp));
 		exit(0);
@@ -245,8 +242,6 @@ main(int argc, char *argv[])
 		usage();
 	} ARGEND
 
-	sodium_mlock(&s, sizeof(s));
-
 #ifndef _DEBUG
 	/* deny core dump as memory contains derivated key */
 	struct rlimit rlim;
@@ -318,9 +313,6 @@ skip:
 
 	if (sodium_init() < 0)
 		return -1;
-
-	if (verbose)
-		fprintf(stderr, "locking key in memory\n");
 
 	return servekey(timeout);
 }
