@@ -23,11 +23,7 @@
 #include "readpassphrase.h"
 #include "config.h"
 
-#ifdef __OpenBSD_
-#define xmalloc malloc_conceal
-#else
-#define xmalloc(p,n) do{if(((p)=malloc(n))){sodium_mlock((p),(n));}}while(0)
-#endif
+#define _POSIX_C_SOURCE 202405L
 
 struct safe_buffer {
 	ssize_t sz;
@@ -157,7 +153,13 @@ struct safe_buffer *
 safe_alloc(struct safe_buffer *b, ssize_t nbytes)
 {
 	b->sz = nbytes;
-	b->buf = xmalloc(nbytes);
+#ifdef __OpenBSD__
+	b->buf = malloc_conceal(nbytes);
+#else
+	b->buf = malloc(nbytes);
+	if (b->buf)
+		sodium_mlock(b->buf, b->sz);
+#endif
 	if (!b->buf)
 		err(1, "malloc");
 	return b;
@@ -169,7 +171,7 @@ safe_release(struct safe_buffer *b)
 	if (!b)
 		return;
 
-#ifndef malloc_conceal
+#ifndef __OpenBSD__
 	sodium_munlock(b->buf, b->sz);
 #endif
 	free(b->buf);
