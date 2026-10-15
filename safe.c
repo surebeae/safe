@@ -47,7 +47,7 @@ struct crypto {
 struct crypto crypto_defaults = {
 	.magic = {'C','R','E','A','M','\1'},
 	.version = 0x10,
-	.xchacha20poly1305_bufsiz = BUFSIZ, /* must match size in readsecret() and writesecret() */
+	.xchacha20poly1305_bufsiz = BUFSIZ,
 	.argon2id_memory          = crypto_pwhash_argon2id_MEMLIMIT_INTERACTIVE/1024,
 	.argon2id_time            = crypto_pwhash_argon2id_OPSLIMIT_INTERACTIVE,
 	.argon2id_threads         = 1, /* not used, hardcoded in libsodium */
