@@ -571,6 +571,8 @@ main(int argc, char *argv[])
 			return -1;
 		}
 
+		sodium_memzero(&verifyphrase, sizeof(verifyphrase));
+
 		fd = open(master_entry, O_RDWR | O_CREAT | O_EXCL, 0600);
 		if (fd < 0)
 			err(1, "%s", master_entry);
@@ -592,6 +594,8 @@ main(int argc, char *argv[])
 		deriv(passphrase, &s);
 		haskey = 1;
 	}
+
+	sodium_memzero(&passphrase, sizeof(passphrase));
 
 	/* try to decrypt master password first, to ensure passphrase match */
 	lseek(fd, sizeof(s.crypto), SEEK_SET);
@@ -639,8 +643,6 @@ main(int argc, char *argv[])
 	}
 
 	sodium_memzero(&s, sizeof(s));
-	sodium_memzero(&passphrase, sizeof(passphrase));
-	sodium_memzero(&verifyphrase, sizeof(verifyphrase));
 	safe_release(&s.message);
 	safe_release(&s.cipher);
 
