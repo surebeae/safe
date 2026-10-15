@@ -153,13 +153,7 @@ struct safe_buffer *
 safe_alloc(struct safe_buffer *b, ssize_t nbytes)
 {
 	b->sz = nbytes;
-#ifdef __OpenBSD__
-	b->buf = malloc_conceal(nbytes);
-#else
 	b->buf = malloc(nbytes);
-	if (b->buf)
-		sodium_mlock(b->buf, b->sz);
-#endif
 	if (!b->buf)
 		err(1, "malloc");
 	return b;
@@ -171,9 +165,6 @@ safe_release(struct safe_buffer *b)
 	if (!b)
 		return;
 
-#ifndef __OpenBSD__
-	sodium_munlock(b->buf, b->sz);
-#endif
 	free(b->buf);
 	b->buf = NULL;
 	b->sz = 0;
@@ -506,9 +497,6 @@ main(int argc, char *argv[])
 	if (sodium_init() < 0)
 		return -1;
 
-	sodium_mlock(&s, sizeof(s));
-	sodium_mlock(&passphrase, sizeof(passphrase));
-	sodium_mlock(&verifyphrase, sizeof(verifyphrase));
 	safe_alloc(&s.message, s.crypto.xchacha20poly1305_bufsiz);
 	safe_alloc(&s.cipher, s.crypto.xchacha20poly1305_bufsiz + crypto_secretstream_xchacha20poly1305_ABYTES);
 
