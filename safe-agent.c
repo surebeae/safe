@@ -271,7 +271,7 @@ main(int argc, char *argv[])
 		err(1, "unveil %s", _PATH_DEVNULL);
 	if (unveil(sockp, "c") == -1)
 		err(1, "unveil %s", sockp);
-	if (pledge("stdio unix proc cpath", NULL) == -1)
+	if (pledge("stdio unix proc rpath wpath cpath", NULL) == -1)
 		err(1, "pledge");
 #endif
 
