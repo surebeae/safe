@@ -1,15 +1,31 @@
 #!/bin/sh
+# Set up the hardened profile: the browser agent runs as _safe-browser,
+# safe-fill-host is setuid _tatl / setgid safe-tatl, and Firefox starts
+# the host from /usr/local/libexec.
 #
-# usage: safe-hardened-setup [-fnr] [-u user] [-e extension-id] [-m bytes] [step ...]
+# usage: safe-hardened-setup [-fnr] [-i init] [-u user] [-e extension-id] [-m bytes] [step ...]
 #
-#   -f   replace differing files (backups in /var/backups/safe-hardened)
+#   -f   replace differing files (backups in /var/backups/safe-hardened,
+#        not next to the file: a stray .bak in /etc/dinit.d looks like
+#        a service)
 #   -n   dry run: print what would be done
-#   -r   restart both agents even if nothing changed
+#   -r   restart both agents even if nothing changed.  This forgets
+#        their keys.  Without -r an agent is only restarted when its
+#        service or env file changed, or when it is not running.
+#   -i   init system: systemd or dinit.  Default: systemd if
+#        /run/systemd/system exists, else dinit if dinitctl or
+#        /etc/dinit.d exists.
 #   -u   the login user whose Firefox uses tatl (default: invoking user)
 #   -e   extension id for the native-messaging manifest
-#   -m   write "LimitMEMLOCK=BYTES" into the agent service files
+#   -m   write a memlock limit of BYTES into the agent service files
+#        (LimitMEMLOCK= for systemd, rlimit-memlock = for dinit).  Off by
+#        default: the agents fail closed when mlock fails and verify
+#        checks VmLck.  With dinit, run dinit-check afterwards.
 #
 # steps, in order: users dirs services manifest doas restart verify next
+#   services  systemd units + /etc/default/*, or dinit services +
+#             /etc/dinit.d/*.env
+#   restart   systemctl restart, or dinitctl stop/reload/start
 #
 # SAFE_SETUP_ROOT=DIR works on a copy of the tree (no users, services).
 
@@ -23,12 +39,14 @@ FORCE=0
 DRY=0
 RESTART=0
 MEMLOCK=
+INIT=
 EXT_ID=tatl@sure.disroot.org
 LOGIN_USER=${DOAS_USER:-${SUDO_USER:-}}
 BACKUP_DIR=$ROOT/var/backups/safe-hardened
 WROTE=0
 BROWSER_DIRTY=0
 CHAT_DIRTY=0
+STARTED=
 fail=0
 
 say() { printf '%s\n' "$*"; }
@@ -42,12 +60,25 @@ run() {
 	fi
 }
 
+# which init system manages services on this machine (empty if unknown)
+detect_init() {
+	if [ -d /run/systemd/system ]; then
+		echo systemd
+	elif command -v dinitctl >/dev/null 2>&1 || [ -d /etc/dinit.d ]; then
+		echo dinit
+	fi
+}
+
+need_init() {
+	[ -n "$INIT" ] || die "cannot tell the init system: give -i systemd or -i dinit"
+}
+
 usage() {
 	sed -n '2,/^$/p' "$0" | sed -n 's/^# \{0,1\}//p'
 	exit 1
 }
 
-while getopts fnru:e:m: opt; do
+while getopts fnru:e:m:i: opt; do
 	case $opt in
 	f) FORCE=1 ;;
 	n) DRY=1 ;;
@@ -55,6 +86,7 @@ while getopts fnru:e:m: opt; do
 	u) LOGIN_USER=$OPTARG ;;
 	e) EXT_ID=$OPTARG ;;
 	m) MEMLOCK=$OPTARG ;;
+	i) INIT=$OPTARG ;;
 	*) usage ;;
 	esac
 done
@@ -63,6 +95,11 @@ shift $((OPTIND - 1))
 case $MEMLOCK in
 *[!0-9]*) die "-m takes a number of bytes: $MEMLOCK" ;;
 esac
+case $INIT in
+''|systemd|dinit) ;;
+*) die "-i takes systemd or dinit: $INIT" ;;
+esac
+[ -n "$INIT" ] || INIT=$(detect_init)
 
 if [ "$(id -u)" -ne 0 ] && [ -z "$ROOT" ] && [ "$DRY" -eq 0 ]; then
 	if command -v sudo >/dev/null 2>&1; then
@@ -76,6 +113,7 @@ if [ "$(id -u)" -ne 0 ] && [ -z "$ROOT" ] && [ "$DRY" -eq 0 ]; then
 	[ "$FORCE" -eq 0 ] || opts="$opts -f"
 	[ "$RESTART" -eq 0 ] || opts="$opts -r"
 	[ -z "$MEMLOCK" ] || opts="$opts -m $MEMLOCK"
+	[ -z "$INIT" ] || opts="$opts -i $INIT"
 	exec $RE_EXEC /bin/sh "$0" $opts -u "${LOGIN_USER:-$(id -un)}" \
 	    -e "$EXT_ID" "$@"
 fi
@@ -161,7 +199,7 @@ home_of() {
 	fi
 }
 
-agent_unit() {
+agent_unit_systemd() {
 	printf '[Unit]\n'
 	printf 'Description=safe %s agent\n' "$1"
 	printf 'After=local-fs.target safe-runtime-setup.service\n'
@@ -178,6 +216,20 @@ agent_unit() {
 	printf '\n'
 	printf '[Install]\n'
 	printf 'WantedBy=multi-user.target\n'
+}
+
+# A dinit process service for one agent: user, safe-agent arguments,
+# env file.  -d is required: without it safe-agent forks and the
+# foreground parent exits, which dinit sees as the service dying.  The
+# agent gets its socket group from the setgid /run/safe/<name> directory.
+agent_unit_dinit() {
+	printf 'type = process\n'
+	printf 'command = %s/bin/safe-agent %s\n' "$PREFIX" "$2"
+	printf 'run-as = %s\n' "$1"
+	printf 'depends-on = safe-runtime-setup\n'
+	printf 'env-file = %s\n' "$3"
+	[ -z "$MEMLOCK" ] || printf 'rlimit-memlock = %s\n' "$MEMLOCK"
+	printf 'smooth-recovery = true\n'
 }
 
 step_users() {
@@ -219,13 +271,32 @@ step_dirs() {
 	say "ok       /var/lib/safe/{browser,chat}"
 }
 
-step_services() {
-	fail=0
+tatl_uid_for_units() {
 	if [ -n "$SKIP_SYS" ]; then
 		tatl_uid=990
 	else
 		tatl_uid=$(id -u _tatl 2>/dev/null) || die "user _tatl missing; run the users step"
 	fi
+}
+
+# The timeout bounds the damage from a compromised browser agent, so refuse
+# a zero one even in a kept (not replaced) service file.  The pattern
+# matches -t 0, -t 00 ... but not -t 05 or -t 900.
+check_browser_timeout() {
+	if [ -r "$1" ] && grep -qE -- '-t[[:space:]]+0+([[:space:]]|$)' "$1"; then
+		bad "$1 has a zero -t: the browser agent must forget its key (re-run with -f)"
+	fi
+}
+
+step_services() {
+	need_init
+	fail=0
+	tatl_uid_for_units
+	"services_$INIT"
+	return "$fail"
+}
+
+services_systemd() {
 	d=/etc/systemd/system
 	envd=/etc/default
 
@@ -243,24 +314,50 @@ RemainAfterExit=yes
 WantedBy=multi-user.target"
 
 	WROTE=0
-	put_str $d/safe-browser-agent.service 0644 "" "$(agent_unit _safe-browser \
+	put_str $d/safe-browser-agent.service 0644 "" "$(agent_unit_systemd _safe-browser \
 	    "-d -s /var/lib/safe/browser -f /run/safe/browser/agent.sock -t 900 -u $tatl_uid -p passwords/ -g" \
 	    $envd/safe-browser-agent)"
 	put_str $envd/safe-browser-agent 0600 root:root ""
 	BROWSER_DIRTY=$WROTE
 
 	WROTE=0
-	put_str $d/safe-chat-agent.service 0644 "" "$(agent_unit _safe-chat \
+	put_str $d/safe-chat-agent.service 0644 "" "$(agent_unit_systemd _safe-chat \
 	    "-d -s /var/lib/safe/chat -f /run/safe/chat/agent.sock -t 0 -p chat/ -g" \
 	    $envd/safe-chat-agent)"
 	put_str $envd/safe-chat-agent 0600 root:root "SAFE_UNSAFE_TIMEOUT=1"
 	CHAT_DIRTY=$WROTE
 
-	f=$ROOT$d/safe-browser-agent.service
-	if [ -r "$f" ] && grep -qE -- '-t[[:space:]]+0+([[:space:]]|$)' "$f"; then
-		bad "$f has a zero -t: the browser agent must forget its key (re-run with -f)"
-	fi
-	return "$fail"
+	check_browser_timeout $ROOT$d/safe-browser-agent.service
+}
+
+services_dinit() {
+	d=/etc/dinit.d
+
+	put_str $d/safe-runtime-setup 0644 "" \
+"type = scripted
+command = $PREFIX/sbin/safe-runtime-setup
+depends-on = local.target"
+
+	WROTE=0
+	put_str $d/safe-browser-agent 0644 "" "$(agent_unit_dinit _safe-browser \
+	    "-d -s /var/lib/safe/browser -f /run/safe/browser/agent.sock -t 900 -u $tatl_uid -p passwords/ -g" \
+	    $d/safe-browser-agent.env)"
+	# SAFE_UNSAFE_MLOCK is deliberately not set: if the key can not be
+	# locked into memory the agent must refuse to start, not silently
+	# run with swappable memory.
+	put_str $d/safe-browser-agent.env 0600 root:root \
+	    "# no overrides: the agent insists on locked memory"
+	BROWSER_DIRTY=$WROTE
+
+	WROTE=0
+	put_str $d/safe-chat-agent 0644 "" "$(agent_unit_dinit _safe-chat \
+	    "-d -s /var/lib/safe/chat -f /run/safe/chat/agent.sock -t 0 -p chat/ -g" \
+	    $d/safe-chat-agent.env)"
+	# -t 0 (never forget the key) needs this acknowledgement
+	put_str $d/safe-chat-agent.env 0600 root:root "SAFE_UNSAFE_TIMEOUT=1"
+	CHAT_DIRTY=$WROTE
+
+	check_browser_timeout $ROOT$d/safe-browser-agent
 }
 
 step_manifest() {
@@ -331,7 +428,7 @@ step_doas() {
 		if grep -q '_safe-browser' "$conf"; then
 			say "ok       a doas rule names _safe-browser"
 		elif grep -Eq '^[[:space:]]*permit[[:space:]].*:wheel[[:space:]]*(#.*)?$' "$conf"; then
-			say "ok       a broad wheel rule covers safe-fill-migrate -U"
+			say "note     a broad wheel rule exists, but migration also needs SAFE_SOCK kept (setenv or keepenv { SAFE_SOCK }); see the next step"
 		else
 			say "note     no doas rule lets you run safe as _safe-browser"
 		fi
@@ -351,27 +448,67 @@ step_doas() {
 
 agent_running() { pgrep -u "$1" -x safe-agent >/dev/null 2>&1; }
 
+# svc_prepare / svc_enable NAME / svc_restart NAME, per init system
+svc_prepare() {
+	case $INIT in
+	systemd) run systemctl daemon-reload || true ;;
+	esac
+}
+
+svc_enable() {
+	case $INIT in
+	systemd) run systemctl enable "$1" || true ;;
+	dinit)
+		[ ! -e /etc/dinit.d/boot.d/$1 ] || return 0
+		run dinitctl enable "$1" || true
+		STARTED="$STARTED $1 "
+		;;
+	esac
+}
+
+svc_restart() {
+	case $INIT in
+	systemd)
+		run systemctl restart "$1" || bad "systemctl restart $1 failed"
+		;;
+	dinit)
+		run dinitctl stop "$1" || true
+		run dinitctl reload "$1" || bad "dinitctl reload $1 failed"
+		run dinitctl start "$1" || bad "dinitctl start $1 failed"
+		;;
+	esac
+}
+
 step_restart() {
 	fail=0
 	if [ -n "$SKIP_SYS" ]; then
 		say "skip     restart (SAFE_SETUP_ROOT set)"
 		return 0
 	fi
-	run systemctl daemon-reload || true
-	for svc in safe-runtime-setup.service safe-browser-agent.service safe-chat-agent.service; do
-		run systemctl enable "$svc" || true
+	need_init
+	suf=
+	[ "$INIT" != systemd ] || suf=.service
+	svc_prepare
+	for svc in safe-runtime-setup safe-browser-agent safe-chat-agent; do
+		svc_enable "$svc$suf"
 	done
-	for pair in safe-browser-agent.service:_safe-browser:"$BROWSER_DIRTY" \
-	    safe-chat-agent.service:_safe-chat:"$CHAT_DIRTY"; do
-		svc=${pair%%:*}
+	for pair in safe-browser-agent:_safe-browser:"$BROWSER_DIRTY" \
+	    safe-chat-agent:_safe-chat:"$CHAT_DIRTY"; do
+		svc=${pair%%:*}$suf
 		rest=${pair#*:}
 		u=${rest%%:*}
 		dirty=${rest#*:}
+		case $STARTED in
+		*" $svc "*)
+			say "start    $svc (unlock it with safe-unlock)"
+			continue
+			;;
+		esac
 		if [ "$RESTART" -eq 0 ] && [ "$dirty" -eq 0 ] && agent_running "$u"; then
 			say "ok       $svc is running with its current configuration (key kept; -r forces a restart)"
 			continue
 		fi
-		run systemctl restart "$svc" || bad "systemctl restart $svc failed"
+		svc_restart "$svc"
 		say "restart  $svc (its key is forgotten: run safe-unlock)"
 	done
 	[ "$DRY" -eq 1 ] || sleep 1
@@ -408,10 +545,14 @@ step_verify() {
 		fi
 	fi
 
+	need_init
 	for e in safe-browser-agent safe-chat-agent; do
-		f=$ROOT/etc/default/$e
+		case $INIT in
+		systemd) f=$ROOT/etc/default/$e ;;
+		dinit) f=$ROOT/etc/dinit.d/$e.env ;;
+		esac
 		if [ -r "$f" ] && grep -q '^[[:space:]]*SAFE_UNSAFE_MLOCK' "$f"; then
-			bad "$f sets SAFE_UNSAFE_MLOCK (re-run with -f)"
+			bad "$f sets SAFE_UNSAFE_MLOCK: a failed mlock would no longer stop the agent (re-run with -f)"
 		fi
 	done
 
@@ -452,7 +593,7 @@ step_verify() {
 	return "$fail"
 }
 
-step_next() {
+next_systemd() {
 	cat <<EOF
 
 Next steps
@@ -491,14 +632,62 @@ Next steps
        safe-fill-migrate-hardened -n "\$P"
        safe-fill-migrate-hardened    "\$P"
 
-     Firefox keeps the original passwords until you run with -b
-     (Firefox closed).
+     Firefox keeps the original passwords; delete them in about:logins
+     once fills work.
 
   5. Lock binding (Sway example):
 
        bindsym \$mod+Escape exec sh -c \\
            'sudo $PREFIX/bin/safe-forget-all; exec wlock'
 EOF
+}
+
+next_dinit() {
+	cat <<EOF
+
+Next steps
+  1. Unlock the agents (each restart or timeout forgets the key):
+
+       safe-unlock
+
+  2. Check that you are really in safe-tatl in this login session (the
+     host is 6750 _tatl:safe-tatl, so Firefox needs the group):
+
+       id
+
+     If it is missing, log out and in, then start Firefox.  The
+     manifest is read when Firefox starts; reloading the extension is
+     not enough.
+
+  3. doas.conf.  This script never edits it.  Migration needs a rule
+     like this, on ONE line, with no "No" before cmd.  Options come
+     BEFORE the identity; the last matching rule wins:
+
+       permit persist setenv { SAFE_SOCK } <you> as _safe-browser cmd $PREFIX/bin/safe
+
+     Check with "doas -C /etc/doas.conf" after every edit.
+
+  4. Migrate Firefox logins (dry run first).  Profiles are listed in
+     ~/.mozilla/firefox/profiles.ini or ~/.config/mozilla/firefox/
+     profiles.ini; installs.ini names the one in use.
+
+       P=<profile directory>
+       safe-fill-migrate-hardened -n "\$P"
+       safe-fill-migrate-hardened    "\$P"
+
+     Firefox keeps the original passwords; delete them in about:logins
+     once fills work.
+
+  5. Lock binding (Sway example):
+
+       bindsym \$mod+Escape exec sh -c \\
+           'doas $PREFIX/bin/safe-forget-all; exec wlock'
+EOF
+}
+
+step_next() {
+	need_init
+	"next_$INIT"
 }
 
 for s in "$@"; do

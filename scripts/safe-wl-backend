@@ -13,8 +13,8 @@ detect() {
 	if "$WL" --help 2>&1 | grep -q -e '--sensitive'; then echo rs; else echo c; fi
 }
 built() {
-	# the string exists only in the rs build (the c build has no such argument)
-	if grep -aq -e '--sensitive' "$HOST" 2>/dev/null; then echo rs; else echo c; fi
+	if LC_ALL=C tr -c '[:print:]' '\n' <"$HOST" 2>/dev/null |
+	    grep -qx -e '--sensitive'; then echo rs; else echo c; fi
 }
 
 case ${1:-check} in
