@@ -1,0 +1,239 @@
+#!/bin/sh
+# snap-firefox-migrate: copy the snap Firefox profile for deb Firefox
+# and import its logins into the hardened browser store.
+#
+# usage: snap-firefox-migrate [-n] [-f] [-a]
+#   -n  dry run
+#   -f  move a non-empty destination aside first
+#   -a  point deb Firefox at the copied profile again (Firefox closed)
+#
+# The snap profile is never modified.  Needs Firefox closed and an
+# unlocked browser agent.  Environment: SAFE_SOCK, SAFE_BIN, SNAP_FF,
+# DEB_FF, FIREFOX, SAFE_NO_FIRSTRUN.
+
+set -eu
+
+PREFIX=${PREFIX:-/usr/local}
+SNAP_FF=${SNAP_FF:-$HOME/snap/firefox/common/.mozilla/firefox}
+DEB_FF=${DEB_FF:-$HOME/.mozilla/firefox}
+MIGRATE=${SAFE_FILL_MIGRATE:-$PREFIX/bin/safe-fill-migrate}
+STORE=${SAFE_BROWSER_STORE:-/var/lib/safe/browser}
+SWITCH_USER=${SAFE_BROWSER_USER:-_safe-browser}
+SAFE_SOCK=${SAFE_SOCK:-/run/safe/browser/agent.sock}
+SAFE_BIN=${SAFE_BIN:-$PREFIX/bin/safe}
+export SAFE_SOCK SAFE_BIN
+
+DRY=
+FORCE=
+ADOPT=
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,/^$/p' "$0" | sed -n 's/^# \{0,1\}//p'; exit 1; }
+
+while getopts nfa opt; do
+	case $opt in
+	n) DRY=1 ;;
+	f) FORCE=1 ;;
+	a) ADOPT=1 ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 0 ] || usage
+
+[ "$(id -u)" -ne 0 ] || die "run as your normal user, not root"
+[ -x "$MIGRATE" ] || die "$MIGRATE is not executable (run: sudo bmake install-hardened)"
+
+if [ -z "$DRY" ] && { pgrep -x firefox || pgrep -x firefox-bin; } >/dev/null 2>&1; then
+	die "Firefox is running; close it first"
+fi
+
+if [ ! -S "$SAFE_SOCK" ]; then
+	warn "cannot see $SAFE_SOCK: the agent is down, or this login session is not in group safe-tatl (check: id)"
+fi
+
+# flags for safe-fill-migrate
+flags=
+[ -z "$DRY" ] || flags="-n"
+
+# run_migrate DIR: migrate every profile in DIR with saved logins
+run_migrate() {
+	found=0
+	for d in "$1"/*/; do
+		[ -f "${d}logins.db" ] || [ -f "${d}logins.json" ] || continue
+		found=1
+		say "== migrate${flags:+ $flags}: $d"
+		# $flags is deliberately unquoted: it is zero to two words
+		"$MIGRATE" $flags -U "$SWITCH_USER" -s "$STORE" "${d%/}" ||
+		    die "safe-fill-migrate failed on $d; nothing further was changed"
+	done
+	[ "$found" -ne 0 ] || die "no profile with saved logins under $1"
+
+}
+
+# the snap's [Install<hash>] sections name another install: rewrite them
+adopt_profile() {
+	ini=$DEB_FF/profiles.ini
+	[ -f "$ini" ] || { warn "no profiles.ini in the copy; start Firefox with: firefox -P"; return 0; }
+	want=
+	if [ -f "$DEB_FF/installs.ini" ]; then
+		want=$(sed -n 's/^Default=//p' "$DEB_FF/installs.ini" | head -n 1)
+	fi
+	if [ -z "$want" ]; then
+		want=$(awk '
+		function chk() { if (isdef && path != "" && !done) { print path; done = 1 } }
+		/^\[/ { chk(); isdef = 0; path = "" }
+		/^Path=/ { path = substr($0, 6) }
+		/^Default=1/ { isdef = 1 }
+		END { chk() }' "$ini" | head -n 1)
+	fi
+	[ -n "$want" ] || { warn "cannot tell which profile was in use; start Firefox with: firefox -P"; return 0; }
+	tmp=$(mktemp "$DEB_FF/profiles.ini.XXXXXX")
+	awk -v want="$want" '
+	function flush(   i, last) {
+		if (n == 0) return
+		if (sec ~ /^\[Install/) { n = 0; return }
+		last = n
+		while (last > 1 && buf[last] ~ /^[ \t]*$/) last--
+		for (i = 1; i <= n; i++) {
+			if (!(sec ~ /^\[Profile/ && buf[i] ~ /^Default=/)) print buf[i]
+			if (i == last && sec ~ /^\[Profile/ && path == want) print "Default=1"
+		}
+		n = 0
+	}
+	/^\[/ { flush(); sec = $0; path = "" }
+	{ buf[++n] = $0 }
+	/^Path=/ { path = substr($0, 6) }
+	END { flush() }' "$ini" >"$tmp"
+	cp "$ini" "$ini.snap-original"
+	mv "$tmp" "$ini"
+	rm -f "$DEB_FF/installs.ini"
+	printf '%s\n' "$want" >"$DEB_FF/.safe-adopted"
+	say "ok       profiles.ini now makes $want the default (original kept as profiles.ini.snap-original)"
+}
+
+# readopt_profile [auto]: point this install's [Install<hash>] at the
+# copy; with auto, return 1 instead of exiting
+readopt_profile() {
+	fatal=die; [ "${1:-}" = auto ] && fatal=warn
+	mark=$DEB_FF/.safe-adopted
+	[ -f "$mark" ] || { $fatal "no $mark: run the migration (without -a) first"; return 1; }
+	want=$(cat "$mark")
+	[ -d "$DEB_FF/$want" ] || { $fatal "the copied profile $DEB_FF/$want is gone"; return 1; }
+	ini=$DEB_FF/profiles.ini
+	grep -q '^\[Install' "$ini" 2>/dev/null || {
+		$fatal "Firefox has not made its install entry yet: start Firefox once, close it, then rerun -a"
+		return 1
+	}
+	cur=$(awk '/^\[/ { ins = ($0 ~ /^\[Install/) } ins && /^Default=/ { print substr($0, 9); exit }' "$ini")
+	if [ "$cur" = "$want" ]; then
+		say "ok       Firefox already uses $want"
+		return 0
+	fi
+	if [ -n "$DRY" ]; then
+		say "+ point the [Install...] entries at $want (now: ${cur:-none}) in profiles.ini and installs.ini"
+		return 0
+	fi
+	stamp=$(date +%Y%m%d%H%M%S)
+	for f in "$ini" "$DEB_FF/installs.ini"; do
+		[ -f "$f" ] || continue
+		cp -p "$f" "$f.pre-adopt.$stamp"
+		tmp=$(mktemp "$f.XXXXXX")
+		# profiles.ini: [Install<hash>] sections; installs.ini: [<hash>]
+		all=0; [ "${f##*/}" = installs.ini ] && all=1
+		awk -v want="$want" -v all="$all" '
+		/^\[/ { ins = all || ($0 ~ /^\[Install/) }
+		ins && /^Default=/ { print "Default=" want; next }
+		ins && /^Locked=/ { print "Locked=1"; next }
+		{ print }' "$f" >"$tmp"
+		mv "$tmp" "$f"
+	done
+	say "ok       Firefox's install entry now uses $want (was ${cur:-none}); backups: *.pre-adopt.$stamp"
+	say "note     the profile Firefox made ($cur) is left alone; remove it in about:profiles if it is empty"
+}
+
+# where newer Firefox keeps profiles when ~/.mozilla does not exist
+XDG_FF=${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/firefox
+
+# start deb Firefox once, headless, so it records its install hash; best effort
+firefox_first_run() {
+	ff=${FIREFOX:-/usr/bin/firefox}
+	if [ -n "${SAFE_NO_FIRSTRUN:-}" ]; then
+		say "note     skipping the first run; start Firefox once, close it, then run: $0 -a"
+		return 0
+	fi
+	if [ ! -x "$ff" ] ||
+	    { [ "$(head -c 2 "$ff" 2>/dev/null)" = '#!' ] && grep -q snap "$ff"; }; then
+		say "note     $ff is not deb Firefox; start it once, close it, then run: $0 -a"
+		return 0
+	fi
+	if ! grep -q '^\[Install' "$DEB_FF/profiles.ini" 2>/dev/null; then
+		say "== starting deb Firefox once, headless, so it records its profile choice"
+		"$ff" --headless about:blank >/dev/null 2>&1 &
+		ffpid=$!
+		i=0
+		while [ "$i" -lt 30 ] && ! grep -q '^\[Install' "$DEB_FF/profiles.ini" 2>/dev/null; do
+			sleep 1; i=$((i + 1))
+		done
+		sleep 2	# let it finish writing
+		kill "$ffpid" 2>/dev/null || true
+		i=0
+		while kill -0 "$ffpid" 2>/dev/null && [ "$i" -lt 15 ]; do
+			sleep 1; i=$((i + 1))
+		done
+		kill -9 "$ffpid" 2>/dev/null || true
+		wait "$ffpid" 2>/dev/null || true
+	fi
+	if ! grep -q '^\[Install' "$DEB_FF/profiles.ini" 2>/dev/null; then
+		if [ -f "$XDG_FF/profiles.ini" ]; then
+			warn "Firefox used $XDG_FF, not $DEB_FF; the copied profile is not visible to it"
+		fi
+		say "note     Firefox did not record a profile; start it once, close it, then run: $0 -a"
+		return 0
+	fi
+	readopt_profile auto || say "note     finish by hand: start Firefox once, close it, then run: $0 -a"
+}
+
+if [ -n "$ADOPT" ]; then
+	readopt_profile
+	exit 0
+fi
+
+if [ ! -d "$SNAP_FF" ]; then
+	# a fresh install where the snap Firefox was never started
+	say "note     no snap Firefox profile at $SNAP_FF: nothing to migrate"
+	exit 0
+fi
+
+if [ -n "$DRY" ]; then
+	say "== dry run on the snap profile; nothing is copied or written"
+	run_migrate "$SNAP_FF"
+	exit 0
+fi
+
+if [ -d "$DEB_FF" ] && [ -n "$(ls -A "$DEB_FF" 2>/dev/null)" ]; then
+	[ -n "$FORCE" ] || die "$DEB_FF is not empty (deb Firefox may already have made a profile); rerun with -f to move it aside"
+	aside=$DEB_FF.pre-migrate.$(date +%Y%m%d%H%M%S)
+	mv "$DEB_FF" "$aside"
+	say "moved    old $DEB_FF to $aside"
+fi
+
+say "== copying $SNAP_FF to $DEB_FF"
+mkdir -p "$DEB_FF"
+cp -a "$SNAP_FF/." "$DEB_FF/"
+find "$DEB_FF" -maxdepth 2 \( -name lock -o -name .parentlock \) -exec rm -f {} +
+adopt_profile
+
+run_migrate "$DEB_FF"
+firefox_first_run
+
+cat <<MSG
+
+== done
+The copy in $DEB_FF still has its passwords.  Now:
+  1. start deb Firefox and test a fill with the tatl extension
+  2. once fills work, remove the saved logins in about:logins
+  3. remove the snap when you are happy:   safe-ubuntu-install snapremove
+MSG

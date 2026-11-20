@@ -1,0 +1,10 @@
+config.h
+*.o
+safe
+safe-agent
+safe-fill-host
+safe-fill-host-hardened
+safe-fill-migrate
+fuzz-host
+*.orig
+*.rej

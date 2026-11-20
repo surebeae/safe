@@ -1,4 +1,4 @@
-.Dd 2019-02-20
+.Dd November 19, 2026
 .Dt SAFE 1
 .Os POSIX.1-2017
 .Sh NAME
@@ -6,15 +6,23 @@
 .Nd digital safe for your secrets
 .Sh SYNOPSIS
 .Nm
-.Op Fl bhr
+.Op Fl bhkr
+.Op Fl o
 .Op Fl p Ar prompt
 .Op Fl s Ar safe
 .Op Oo Fl af Oc Ar secret
-.Sh DESCRIPTION
 .Nm
-stores secrets (files) encrypted on your disk, and lets you retrieve them,
+.Fl F
+.Sh DESCRIPTION
+This is a fork of Willy Goiffon's
+.Xr safe 1
+with a number of hardening changes; see
+.Sx FORK NOTES
+below.
+.Pp
+.Nm
+stores secrets (files) encrypted on disk and lets you retrieve them,
 given that you have the right password.
-.El
 .Bl -tag -width Ds
 .It Ar secret
 Decrypt file
@@ -27,57 +35,147 @@ Use
 .Fl f
 to overwrite an existing secret.
 .It Fl b
-Batch mode. Reads master password from stdin.
+Batch mode.
+Reads the master password from stdin, bypassing
+.Ev SAFE_ASKPASS
+even when no TTY is available.
 .It Fl f
 Force writing to
 .Ar secret
 if it exists.
 Implies
 .Fl a .
+Also required to overwrite the
+.Ar master
+entry; see
+.Sx MASTER PASSWORD .
 .It Fl h
 Print a quick usage text.
 .It Fl k
-Prompt user for password using an external program (see: SAFE_ASKPASS).
+Prompt for the password using an external program (see
+.Ev SAFE_ASKPASS ) .
+Ignored when
+.Fl b
+is set.
 .It Fl p Ar prompt
-Prompt user for password using text
+Prompt for the password using text
 .Ar prompt .
 (default: "password:")
 .It Fl r
-Remember the password. The variable
+Remember the password by pushing the derived key to a running agent.
 .Ev SAFE_SOCK
-must be set and point to the UNIX-domain socket bound by a running agent
-(see AGENT).
+must be set and point to the UNIX-domain socket bound by a running
+.Xr safe-agent 1 .
 .It Fl s Ar safe
 Set the path to your safe as
 .Ar safe .
+Symbolic links are resolved with
+.Xr realpath 3
+before use.
 (default: .secrets)
+.It Fl F
+Forget the key held by the running agent.
+Connects to the agent socket named by
+.Ev SAFE_SOCK ,
+or, if it is unset, by
+.Pa $XDG_RUNTIME_DIR/safe/sock ,
+and sends the
+.Sq F
+command; see
+.Xr safe-agent 1 .
+The socket is validated as for any other use, except that root only
+requires it to be a socket, and the agent's uid
+.Pq Dv SO_PEERCRED
+must match the socket's owner.
+The agent accepts
+.Sq F
+from its own uid and from root, which is what makes
+.Nm Fl F ,
+run as root by the
+.Ic safe-forget-all
+script, work in the hardened profile.
+If the socket does not exist or nothing listens on it, the command
+succeeds.
+.Fl F
+cannot be combined with
+.Fl a , Fl b , Fl f , Fl k , Fl o , Fl r ,
+or with a secret argument.
+.It Fl o
+With
+.Fl r ,
+mark the pushed key as one-shot: the agent forgets it after the
+next
+.Sq D
+or
+.Sq E
+request.
+Requires
+.Fl r .
+.El
 .Sh AGENT
 When the agent is started,
 .Nm
-can retrieve the key from it rather than prompting you for a password.
+can use it to decrypt and encrypt entries rather than prompting for a password; the key never leaves the agent.
 .Nm
 will try to read the key from the agent whenever the
 .Ev SAFE_SOCK
 variable is set in the environment.
 .Pp
-When the agent is first started, you can push the key to it using the
-.Fl p
+To push the derived key to a running agent, use the
+.Fl r
 flag.
+This must be done at least once after the agent starts so that the
+agent has a key to hand out.
+.Pp
+If
+.Ev SAFE_SOCK
+is set but points to a socket that fails validation, a warning is
+printed and the socket is ignored; the key is then derived from a
+password as usual.
+See
+.Xr safe-agent 1
+for the socket protocol and the parent-directory requirements.
 .Sh MASTER PASSWORD
 When you add your first secret to the safe, a
 .Ar master
-entry will be created automatically. This entry stores your master
-password, and is used to check that you typed the master password
-correctly on the next calls.
+entry is created automatically.
+This entry holds a constant payload, not your password, and is used to
+check that you typed it correctly on subsequent calls and as the reference for the
+key-derivation salt.
 .Pp
 Do not delete this entry as it could lead to a corrupted safe.
+To recover from a lost or corrupted master entry, see
+.Xr safe-store 5 .
+.Pp
+To overwrite the
+.Ar master
+entry in place,
+.Fl f
+is required.
+The recovery form
+.Bd -literal
+  safe -f -a master < /dev/null
+  password:
+  verify:
+.Ed
+.Pp
+re-encrypts the entry without first trying to decrypt it, which is what
+you want when the current entry is broken.
+The password prompt takes the existing master password; the bytes read
+from stdin become the new master entry's payload and are never
+interpreted, so any content works.
+See
+.Xr safe-store 5
+for the full recovery procedure.
 .Sh EXAMPLES
-Store a secret in your safe
+Store a secret in your safe:
 .Bd -literal
   $ safe -a secret/file < kitten.gif
 .Ed
 .Pp
-List all secrets in $SAFE_DIR (choose your weapon)
+List all secrets in
+.Ev SAFE_DIR
+(choose your weapon):
 .Bd -literal
   $ tree --noreport $SAFE_DIR
   $ find $SAFE_DIR -type f
@@ -85,10 +183,18 @@ List all secrets in $SAFE_DIR (choose your weapon)
   $ tar -C $SAFE_DIR -v -f /dev/null -c . | cut -d / -f 2-
 .Ed
 .Pp
-Retrieve a secret from your safe
+Retrieve a secret from your safe:
 .Bd -literal
   $ safe secret/file > kitten.gif
   password:
+.Ed
+.Pp
+Use the agent so you only type the password once:
+.Bd -literal
+  $ eval $(safe-agent -t 900)
+  $ safe -r
+  password:
+  $ safe secret/file > kitten.gif
 .Ed
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
@@ -97,10 +203,168 @@ Defines the location of your safe (default: .secrets)
 .It Ev SAFE_SOCK
 Path to the UNIX-domain socket used to communicate with the agent.
 .It Ev SAFE_ASKPASS
-If no TTY is available, the program specified by this variable will be
-used to read the master password (default: ssh-askpass)
+If no TTY is available and
+.Fl b
+is not given, the program specified by this variable is used to read
+the master password (default: ssh-askpass).
+.It Ev SAFE_UNSAFE_MLOCK
+If set, downgrade
+.Xr mlock 2
+failures from fatal errors to warnings.
+.It Ev SAFE_ALLOW_NO_LANDLOCK
+If set, run without Landlock when the kernel does not support it
+(sandboxed Linux builds only).
+Without it,
+.Nm
+refuses to run on such a kernel.
+.El
+.Sh SECURITY CONSIDERATIONS
+Without an agent, decryption streams to stdout, so a corrupt or
+truncated secret may produce partial plaintext before the final MAC
+check fails.
+Check the exit status before consuming the output.
+Through the agent, the entry is authenticated before any plaintext is
+sent.
+.Pp
+In batch mode the master password is read from stdin.
+Depending on how it was supplied, it may be visible to other processes
+owned by the same user.
+.Pp
+The key is derived with Argon2id using libsodium's
+.Dv MODERATE
+parameters: 256 MiB of memory, 3 passes, one lane.
+See
+.Xr safe-store 5 .
+.Sh FORK NOTES
+This manual page describes the forked version of
+.Nm .
+User-visible differences from the upstream are summarized below; see
+.Xr safe-store 5
+for the on-disk format.
+.Bl -bullet
+.It
+New entries are written in format 0x12: the header and the entry's
+name are authenticated, and the final chunk is padded so that every
+entry shorter than 256 bytes has the same size on disk.
+Format 0x11 entries are still read.
+See
+.Xr safe-store 5 .
+.It
+Truncation and trailing data are rejected.
+.It
+The CREAM header is validated before it is used: magic, version,
+chunk size and Argon2id parameters must match the frozen values
+exactly.
+.It
+Secret writes are atomic: a temporary file in the same directory is
+fsync'd and renamed into place.
+.It
+Secret paths are validated: no absolute paths, no "..", no "//", no
+trailing "/", no leading "./".
+.It
+The safe directory and the agent socket are ownership- and
+permission-checked.
+.It
+The agent wire protocol is framed and re-pushing a key while one is
+loaded is reliable.
+.It
+The agent reports readiness to its parent before
+.Ev SAFE_SOCK
+is printed.
+.It
+.Fl b
+reads the master password from stdin even with no TTY.
+.It
+.Fl f
+is required to overwrite the
+.Ar master
+entry;
+.Fl f Fl a Ar master
+is the recovery form.
+.It
+.Fl F
+forgets the key held by the running agent, with the agent's
+.Sq F
+command.
+The agent accepts it from its own uid and from root, which is what
+makes
+.Fl F
+usable in the hardened profile where the agent runs as a different
+uid from the caller.
+.It
+.Fl o
+marks the pushed key as one-shot: the agent forgets it after the
+next
+.Sq D
+or
+.Sq E .
+.It
+The agent never returns its key.
+It decrypts
+.Pq Sq D
+and encrypts
+.Pq Sq E
+entries for its clients;
+.Nm
+uses both when an agent is available, and
+.Xr safe-fill-host 1
+uses
+.Sq D .
+The path is validated with the same rules
+.Nm
+uses and is authenticated as AEAD associated data.
+.It
+The agent accepts
+.Fl u Ar uid
+to admit a second uid for
+.Sq D ;
+.Sq P ,
+.Sq I
+and
+.Sq E
+remain euid-only, so
+.Fl u
+grants decrypt access only.
+.It
+The agent accepts
+.Fl p Ar prefix
+to restrict
+.Sq D
+and
+.Sq E
+to one subtree of the store.
+.It
+The agent writes
+.Pa <socket_dir>/agent.pid
+(0640) after binding the socket, for scripts and service managers.
+.It
+Peer identity is checked with
+.Dv SO_PEERCRED ,
+not only with Unix file permissions on the socket: the agent
+distinguishes callers by uid, and
+.Fl F
+checks that the agent runs as the socket's owner.
+.It
+Memory holding keys and passwords is
+.Xr mlock 2 Ns 'd ;
+failures are fatal unless
+.Ev SAFE_UNSAFE_MLOCK
+is set.
+.It
+Linux release builds enable
+.Xr seccomp 2
+and
+.Xr landlock 2
+sandboxing and disable core dumps and
+.Xr ptrace 2 .
+.El
 .Sh SEE ALSO
 .Xr safe-agent 1 ,
+.Xr safe-fill-host 1 ,
+.Xr safe-fill-migrate 1 ,
 .Xr safe-store 5
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org
+.Pp
+Modifications in this fork: see
+.Pa README .

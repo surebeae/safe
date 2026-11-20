@@ -1,0 +1,319 @@
+#!/bin/sh
+# safe-ubuntu-install: install the hardened profile on Ubuntu and
+# migrate the snap Firefox profile.  Run as your user; uses sudo.
+#
+# usage: safe-ubuntu-install [-n] [-y] [stage ...]
+#   -n  dry run
+#   -y  do not ask before starting
+#
+# stages: deps build install firefox services doas unlock migrate verify
+# only when named: tests adopt snapremove
+
+set -eu
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+TREE=$(dirname "$HERE")
+PREFIX=${PREFIX:-/usr/local}
+ME=$(id -un)
+DRY=0
+YES=0
+RELOGIN=0
+BACKUP_DIR=/var/backups/safe-hardened
+MOZ_FPR=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,/^$/p' "$0" | sed -n 's/^# \{0,1\}//p'; exit 1; }
+run() {
+	if [ "$DRY" -eq 1 ]; then
+		say "+ $*"
+	else
+		"$@"
+	fi
+}
+
+while getopts ny opt; do
+	case $opt in
+	n) DRY=1 ;;
+	y) YES=1 ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+[ "$(id -u)" -ne 0 ] || die "run as your normal user, not root; it calls sudo itself"
+command -v dpkg-query >/dev/null 2>&1 || die "this script is for Ubuntu/Debian"
+command -v sudo >/dev/null 2>&1 || die "sudo not found"
+[ -f "$TREE/makefile" ] || die "$TREE is not the source tree (no makefile)"
+
+[ $# -gt 0 ] || set -- deps build install firefox services doas unlock migrate verify
+for s in "$@"; do
+	case $s in
+	deps|build|install|firefox|services|doas|unlock|migrate|verify|tests|adopt|snapremove) ;;
+	blank) die "the blank stage was removed; remove migrated logins in Firefox (about:logins)" ;;
+	*) die "unknown stage: $s" ;;
+	esac
+done
+
+if [ "$YES" -eq 0 ] && [ "$DRY" -eq 0 ]; then
+	say "stages: $*"
+	say "tree:   $TREE"
+	printf 'Go ahead? [y/N] '
+	read -r ans
+	case $ans in y|Y|yes) ;; *) die "aborted" ;; esac
+fi
+[ "$DRY" -eq 1 ] || sudo -v
+
+pkg_ok() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
+
+stage_deps() {
+	pkgs="bmake clang pkg-config libsodium-dev libnss3-dev libsqlite3-dev libbsd-dev opendoas wl-clipboard strace socat gnupg wget"
+	missing=
+	for p in $pkgs; do
+		pkg_ok "$p" || missing="$missing $p"
+	done
+	if [ -z "$missing" ]; then
+		say "ok       all packages present"
+		return 0
+	fi
+	say "missing:$missing"
+	run sudo apt-get install -y $missing
+}
+
+# WL_CPPFLAGS for the wl-copy on this machine (see scripts/safe-wl-backend)
+wl_flags() {
+	WL_COPY_PATH=/usr/bin/wl-copy sh "$HERE/safe-wl-backend" flags
+}
+
+stage_build() {
+	cd "$TREE"
+	wl=$(wl_flags)
+	if [ -n "$wl" ]; then say "note     clipboard backend: C wl-clipboard ($wl)"
+	else say "note     clipboard backend: wl-clipboard-rs"; fi
+	run bmake clean
+	run bmake WL_CPPFLAGS="$wl"
+}
+
+stage_install() {
+	cd "$TREE"
+	run sudo bmake WL_CPPFLAGS="$(wl_flags)" install-hardened
+}
+
+stage_firefox() {
+	ver=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
+	if [ -n "$ver" ] && pkg_ok firefox; then
+		case $ver in
+		*snap*) say "note     firefox $ver is Ubuntu's snap launcher; installing Mozilla's build" ;;
+		*) say "ok       deb firefox $ver is installed"; return 0 ;;
+		esac
+	fi
+	key=/etc/apt/keyrings/packages.mozilla.org.asc
+	if [ "$DRY" -eq 1 ]; then
+		say "+ fetch Mozilla's signing key, require fingerprint $MOZ_FPR"
+		say "+ write $key, /etc/apt/sources.list.d/mozilla.list, /etc/apt/preferences.d/mozilla"
+		say "+ sudo apt-get update && sudo apt-get install -y firefox"
+		return 0
+	fi
+	tmp=$(mktemp)
+	trap 'rm -f "$tmp"' EXIT
+	wget -q -O "$tmp" https://packages.mozilla.org/apt/repo-signing-key.gpg ||
+	    die "could not download Mozilla's signing key"
+	fprs=$(gpg --show-keys --with-colons "$tmp" 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }')
+	if ! printf '%s\n' "$fprs" | grep -qx "$MOZ_FPR"; then
+		die "Mozilla key fingerprint mismatch: got '$fprs', expected $MOZ_FPR (check Mozilla's install page, then edit MOZ_FPR)"
+	fi
+	sudo install -d -m 0755 /etc/apt/keyrings
+	sudo install -m 0644 "$tmp" "$key"
+	printf 'deb [signed-by=%s] https://packages.mozilla.org/apt mozilla main\n' "$key" |
+	    sudo tee /etc/apt/sources.list.d/mozilla.list >/dev/null
+	printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' |
+	    sudo tee /etc/apt/preferences.d/mozilla >/dev/null
+	sudo apt-get update
+	sudo apt-get install -y --allow-downgrades firefox
+	apt-cache policy firefox | grep -q 'packages.mozilla.org' ||
+	    die "firefox did not come from packages.mozilla.org (apt-cache policy firefox)"
+	ver=$(dpkg-query -W -f='${Version}' firefox)
+	case $ver in *snap*) die "firefox $ver is still the snap launcher" ;; esac
+	say "ok       deb firefox $ver"
+}
+
+stage_services() {
+	hs=$PREFIX/sbin/safe-hardened-setup
+	if [ "$DRY" -eq 1 ]; then
+		say "+ sudo $hs -u $ME users dirs services manifest restart verify"
+		return 0
+	fi
+	[ -x "$hs" ] || die "$hs missing: run the install stage"
+	# the doas and next steps are left out: this script owns them
+	sudo "$hs" -u "$ME" users dirs services manifest restart verify
+	getent group safe-tatl | tr ':,' '  ' | tr ' ' '\n' | grep -qx "$ME" || die "$ME is not in safe-tatl"
+}
+
+stage_doas() {
+	if [ "$DRY" -eq 1 ]; then
+		say "+ add to /etc/doas.conf: permit persist setenv { SAFE_SOCK } $ME as _safe-browser cmd $PREFIX/bin/safe"
+		return 0
+	fi
+	command -v doas >/dev/null 2>&1 || die "doas not installed (apt install opendoas)"
+	# runs as root from this script's text: nothing you can write is used
+	sudo env RULE_USER="$ME" SAFE_BIN="$PREFIX/bin/safe" BACKUP_DIR="$BACKUP_DIR" sh -s <<'ROOT'
+set -eu
+conf=/etc/doas.conf
+[ -f "$conf" ] || { echo "error: $conf missing" >&2; exit 1; }
+BEGIN='# BEGIN safe-ubuntu-install (managed; the last matching rule wins, so keep this at the end)'
+END='# END safe-ubuntu-install'
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+if ! out=$(doas -C "$conf" 2>&1); then
+	echo "error: $conf does not parse before any change: $out" >&2
+	echo "       (a stray 'No' before 'cmd' comes from copying the man page; fix it first)" >&2
+	exit 1
+fi
+
+try() {
+	awk -v b="$BEGIN" -v e="$END" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip { print }' "$conf" >"$tmp"
+	[ -z "$(tail -c 1 "$tmp")" ] || echo >>"$tmp"
+	{
+		printf '%s\n' "$BEGIN"
+		printf 'permit persist %s %s as _safe-browser cmd %s\n' "$1" "$RULE_USER" "$SAFE_BIN"
+		printf '%s\n' "$END"
+	} >>"$tmp"
+	doas -C "$tmp" >/dev/null 2>&1
+}
+
+chosen=
+for opt in 'setenv { SAFE_SOCK }' 'keepenv { SAFE_SOCK }'; do
+	if try "$opt"; then chosen=$opt; break; fi
+done
+[ -n "$chosen" ] || { echo "error: this doas rejects both 'setenv { SAFE_SOCK }' and 'keepenv { SAFE_SOCK }'; $conf left alone" >&2; exit 1; }
+
+if cmp -s "$tmp" "$conf"; then
+	echo "ok       $conf already has the rule ($chosen)"
+	exit 0
+fi
+mkdir -p "$BACKUP_DIR"
+chmod 0700 "$BACKUP_DIR"
+b=$BACKUP_DIR/doas.conf.$(date +%Y%m%d%H%M%S)
+cp -p "$conf" "$b"
+cat "$tmp" >"$conf"
+doas -C "$conf" >/dev/null || { cp -p "$b" "$conf"; echo "error: new $conf failed its check; restored" >&2; exit 1; }
+echo "wrote    $conf ($chosen); previous copy: $b"
+ROOT
+}
+
+stage_unlock() {
+	if [ "$DRY" -eq 1 ]; then
+		say "+ $PREFIX/bin/safe-unlock"
+		return 0
+	fi
+	[ -t 0 ] || die "unlock needs a terminal for the password prompt"
+	[ -x "$PREFIX/bin/safe-unlock" ] || die "$PREFIX/bin/safe-unlock missing"
+	say "Enter your safe master password when asked."
+	"$PREFIX/bin/safe-unlock"
+}
+
+stage_migrate() {
+	if [ "$DRY" -eq 1 ]; then
+		run sh "$HERE/snap-firefox-migrate" -n
+		return 0
+	fi
+	run sh "$HERE/snap-firefox-migrate"
+}
+
+stage_adopt() {
+	if [ "$DRY" -eq 1 ]; then
+		run sh "$HERE/snap-firefox-migrate" -n -a
+	else
+		run sh "$HERE/snap-firefox-migrate" -a
+	fi
+}
+
+stage_verify() {
+	fail=0
+	chk() { say "ok       $*"; }
+	bad() { printf 'FAIL     %s\n' "$*" >&2; fail=1; }
+	if [ "$DRY" -eq 1 ]; then say "+ sudo $PREFIX/sbin/safe-hardened-setup -u $ME verify"; return 0; fi
+	sudo "$PREFIX/sbin/safe-hardened-setup" -u "$ME" verify || fail=1
+
+	ver=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
+	case $ver in
+	'') bad "firefox is not installed as a deb" ;;
+	*snap*) bad "firefox $ver is still the snap launcher (run the firefox stage)" ;;
+	*) chk "deb firefox $ver" ;;
+	esac
+	if id -nG | tr ' ' '\n' | grep -qx safe-tatl; then
+		chk "this login session is in safe-tatl"
+	fi
+	# doas.conf is often mode 0600, so read it as root
+	if sudo grep -q 'BEGIN safe-ubuntu-install' /etc/doas.conf 2>/dev/null; then
+		chk "doas rule present"
+	else
+		bad "doas rule missing (run the doas stage)"
+	fi
+	ini=$HOME/.mozilla/firefox/profiles.ini
+	mark=$HOME/.mozilla/firefox/.safe-adopted
+	if [ -f "$ini" ] && [ -f "$mark" ]; then
+		want=$(cat "$mark")
+		cur=$(awk '/^\[/ { ins = ($0 ~ /^\[Install/) } ins && /^Default=/ { print substr($0, 9); exit }' "$ini")
+		if [ -z "$cur" ]; then
+			chk "$ini adopts the copied profile $want (Firefox not started since)"
+		elif [ "$cur" = "$want" ]; then
+			chk "deb Firefox uses the copied profile $want"
+		else
+			bad "deb Firefox uses $cur, not the copied profile $want; close Firefox and run: sh $HERE/snap-firefox-migrate -a"
+		fi
+	elif [ -f "$ini" ]; then
+		say "note     $ini was not written by this migration"
+	else
+		say "note     no $ini yet (migrate stage not run)"
+	fi
+	xini=${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/firefox/profiles.ini
+	if [ -f "$xini" ]; then
+		if [ -f "$ini" ]; then
+			say "note     $xini also exists; Firefox uses one of the two trees (check about:profiles)"
+		else
+			say "note     Firefox keeps its profiles in ${xini%/profiles.ini}, not ~/.mozilla/firefox"
+		fi
+	fi
+	if snap list firefox >/dev/null 2>&1; then
+		say "note     snap firefox is still installed (original profile intact); stage snapremove when done"
+	fi
+	return "$fail"
+}
+
+stage_tests() {
+	cd "$TREE"
+	run ./tests.sh
+	run sudo sh ./tests.sh
+}
+
+stage_snapremove() {
+	say "This runs: sudo snap remove firefox"
+	say "It deletes ~/snap/firefox, including the ORIGINAL profile with its passwords."
+	say "(snapd normally keeps a snapshot for a while; do not rely on it.)"
+	[ -t 0 ] || die "needs a terminal"
+	printf 'Type yes to continue: '
+	read -r ans
+	[ "$ans" = yes ] || die "aborted"
+	run sudo snap remove firefox
+}
+
+rc=0
+for s in "$@"; do
+	say "== $s"
+	( "stage_$s" ) || { rc=1; printf 'stage %s failed; stopping\n' "$s" >&2; break; }
+done
+
+# stages run in subshells, so decide about the group here
+if getent group safe-tatl | tr ':,' '  ' | tr ' ' '\n' | grep -qx "$ME" &&
+    ! id -nG | tr ' ' '\n' | grep -qx safe-tatl; then
+	cat <<MSG
+
+LOG OUT AND IN AGAIN before starting Firefox: you are in safe-tatl now
+but this session does not have the group yet, and the native host
+(mode 6750 _tatl:safe-tatl) needs it.  Check with: id
+MSG
+fi
+exit "$rc"

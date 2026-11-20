@@ -1,0 +1,57 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+	if command -v sudo >/dev/null 2>&1; then
+		exec sudo /usr/local/bin/safe-unlock "$@"
+	elif command -v doas >/dev/null 2>&1; then
+		exec doas /usr/local/bin/safe-unlock "$@"
+	else
+		echo "error: need root; install sudo or doas" >&2
+		exit 1
+	fi
+fi
+
+SAFE=/usr/local/bin/safe
+
+if script -qec true /dev/null 2>/dev/null; then
+	script_linux=1
+else
+	script_linux=0
+fi
+
+push() {
+	store="$1"; sock="$2"; user="$3"; label="$4"
+	if [ ! -S "$sock" ]; then
+		echo "skip $label: $sock not present" >&2
+		return 0
+	fi
+	echo "unlocking $label"
+	if [ "$script_linux" -eq 1 ]; then
+		su -s /bin/sh -c \
+		    "script -qec \"env SAFE_SOCK='$sock' '$SAFE' -s '$store' -r\" /dev/null" \
+		    "$user"
+	else
+		su -s /bin/sh -c \
+		    "script -qe /dev/null env SAFE_SOCK='$sock' '$SAFE' -s '$store' -r" \
+		    "$user"
+	fi
+}
+
+case "${1:-all}" in
+all)
+	push /var/lib/safe/chat    /run/safe/chat/agent.sock    _safe-chat    chat
+	push /var/lib/safe/browser /run/safe/browser/agent.sock _safe-browser browser
+	;;
+chat)
+	push /var/lib/safe/chat    /run/safe/chat/agent.sock    _safe-chat    chat
+	;;
+browser)
+	push /var/lib/safe/browser /run/safe/browser/agent.sock _safe-browser browser
+	;;
+*)
+	echo "usage: $0 [chat|browser|all]" >&2
+	exit 1
+	;;
+esac

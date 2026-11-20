@@ -1,15 +1,13 @@
-/*
- * Copy me if you can.
- * by 20h
- */
+
 
 #ifndef ARG_H__
 #define ARG_H__
 
 extern char *argv0;
 
-/* use main(int argc, char *argv[]) */
-#define ARGBEGIN	for (argv0 = *argv, argv++, argc--;\
+
+#define ARGBEGIN	for (argv0 = (argc > 0 && argv[0]) ? *argv : "",\
+				argc > 0 ? (argv++, argc--) : 0;\
 					argv[0] && argv[0][0] == '-'\
 					&& argv[0][1];\
 					argc--, argv++) {\

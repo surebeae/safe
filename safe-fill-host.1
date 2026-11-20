@@ -1,0 +1,321 @@
+.Dd November 19, 2026
+.Dt SAFE-FILL-HOST 1
+.Os POSIX.1-2017
+.Sh NAME
+.Nm safe-fill-host
+.Nd native messaging host that copies a safe password to the clipboard
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+is started by Firefox on behalf of the tatl extension, through the
+native-messaging manifest
+.Pa ~/.mozilla/native-messaging-hosts/safe_fill.json .
+It is not meant to be run by hand.
+.Pp
+It reads one native-messaging frame from stdin (a 32-bit length in
+native byte order, then that many bytes of JSON), builds the store path
+.Pa passwords/<origin>/<username> ,
+asks
+.Xr safe-agent 1
+to decrypt that one path with the
+.Sq D
+command, and hands the plaintext to
+.Xr wl-copy 1
+with
+.Fl -paste-once .
+It writes one frame back and exits.
+.Nm
+never holds the key and never opens the store; the agent does both.
+.Pp
+A request can instead ask for the usernames saved for an origin, which
+the agent lists with the
+.Sq L
+command; see
+.Sx REQUEST .
+Nothing is decrypted for these.
+.Pp
+After a successful copy a child process runs
+.Ql wl-copy --clear
+after
+.Dv WL_CLEAR_DELAY_SEC
+seconds (10 by default) as a backstop.
+.Sh REQUEST
+The request is a JSON object of string members.
+The optional
+.Ar op
+member selects what is asked; without it the request is a fill:
+.Bl -tag -width Ds
+.It Li {"origin":"example.org","username":"alice"}
+.It Li {"op":"fill","origin":"example.org","username":"alice"}
+Copy the password of
+.Pa passwords/example.org/alice .
+.It Li {"op":"user","origin":"example.org"}
+If exactly one entry is saved for the origin, copy its username, with
+.Fl -paste-once
+as for a password.
+No
+.Ql wl-copy --clear
+is scheduled: a username is not secret, and the delayed clear would
+wipe a password copied right after it.
+.It Li {"op":"list","origin":"example.org"}
+Reply with the usernames saved for the origin.
+Nothing is copied.
+.El
+.Pp
+The parser is deliberately small:
+.Bl -bullet
+.It
+Each member is found as the first occurrence of
+.Ql \(dq<name>\(dq:\(dq
+with no whitespace around the colon; the sender must emit compact JSON.
+.It
+Values may not contain a backslash, so no escapes, and may not be empty.
+.It
+.Ar origin
+is at most 253 bytes of
+.Ql "A-Z a-z 0-9 . : - _" ,
+does not start with
+.Ql \&.
+or
+.Ql \&: ,
+and contains no
+.Ql .. .
+A port is part of the origin
+.Pq Ql example.org:8443 ;
+default ports are not.
+.It
+.Ar username
+is at most 255 bytes, contains no
+.Ql / ,
+.Ql \e ,
+control characters or
+.Ql .. ,
+and does not start with
+.Ql \&. .
+.El
+.Pp
+These are the same rules
+.Xr safe-fill-migrate 1
+applies when it names entries, so every migrated entry can be filled.
+.Sh REPLY
+.Bl -tag -width Ds -compact
+.It Li {"success":true}
+The password is on the clipboard.
+.It Li {"success":true,"username":"alice"}
+.Pq Ar user
+The username is on the clipboard.
+.It Li {"success":true,"usernames":["alice","bob"]}
+.Pq Ar list
+The usernames saved for the origin, possibly none.
+.It Li {"success":false,"error":"<code>"}
+Nothing was copied.
+.It Li {"success":false,"error":"<code>","usernames":[...]}
+.Pq Ar user
+Nothing was copied, because
+.Ar code
+is
+.Li no_entry
+(the list is empty) or
+.Li ambiguous
+(it has several names; the extension lets the user pick one).
+.El
+.Pp
+Names are JSON strings in which only
+.Ql \(dq
+is escaped, since a valid username contains no backslash and no control
+character.
+.Pp
+Error codes:
+.Bl -tag -width "clipboard_failed" -compact
+.It Li bad_frame
+The frame was empty, short, or longer than 64 KiB.
+.It Li bad_request
+A member is missing, empty, or contains a backslash.
+.It Li bad_op
+.Ar op
+is not
+.Li fill ,
+.Li user
+or
+.Li list .
+.It Li bad_origin , bad_username
+A value failed the checks above.
+.It Li path_too_long
+The resulting store path does not fit.
+.It Li no_agent
+No agent socket was found, or it failed validation.
+.It Li prctl_failed , landlock_failed , seccomp_failed
+The sandbox could not be set up.
+.It Li oom , mlock_failed
+The secret buffer could not be allocated or locked.
+.It Li agent_failed
+The agent refused, was locked, or the entry does not exist or does not
+authenticate.
+For
+.Ar user
+and
+.Ar list :
+the agent refused or was locked; a missing origin is an empty list.
+.It Li no_entry , ambiguous
+.Pq Ar user
+See above.
+.It Li empty_secret
+The entry decrypted to nothing.
+.It Li clipboard_failed
+.Xr wl-copy 1
+could not be run or failed.
+.El
+.Sh AGENT SOCKET
+In the hardened build
+.Pq Ic make install-hardened
+the socket path is compiled in
+.Pq Dv AGENT_SOCK_PATH ,
+by default
+.Pa /run/safe/browser/agent.sock ,
+and the environment is not consulted for it.
+Otherwise
+.Nm
+uses
+.Ev SAFE_SOCK ,
+then the path written by the agent in
+.Pa $XDG_RUNTIME_DIR/safe/sock .
+.Pp
+The socket must not be owned by root, its directory must not be owned
+by root and must not grant write to group or any access to others.
+Outside the hardened build both must also be owned by the effective
+uid.
+After connecting,
+.Nm
+checks with
+.Dv SO_PEERCRED
+that the agent runs as the socket's owner.
+.Sh CLIPBOARD BACKEND
+The backend is chosen when
+.Nm
+is built, never at run time:
+.Bl -tag -width Ds
+.It wl-clipboard-rs (default)
+Runs
+.Ql wl-copy --paste-once --sensitive .
+Needs a compositor with a data-control protocol (wlroots-based
+compositors, KDE).
+.It wl-clipboard, the C implementation
+Built with
+.Ql WL_CPPFLAGS=-DWL_BACKEND_C .
+Required on GNOME/mutter, which has no data-control protocol; this is
+the usual case on Ubuntu.
+Runs
+.Ql wl-copy --paste-once -t text/plain ;
+there is no
+.Fl -sensitive .
+This
+.Xr wl-copy 1
+buffers its input in
+.Pa /tmp/wl-copy-buffer-XXXXXX/stdin ,
+so the sandbox grants
+.Pa /tmp
+for this build only, and the password is written to that file for as
+long as it is on the clipboard.
+If
+.Pa /tmp
+is not a tmpfs, that file is on disk.
+.El
+.Pp
+A host built for one backend and run with the other fails without an
+obvious error.
+.Ic safe-wl-backend check
+compares the installed
+.Xr wl-copy 1
+with the installed host;
+.Ic safe-wl-backend flags
+prints the
+.Ev WL_CPPFLAGS
+value for the installed
+.Xr wl-copy 1 .
+.Sh HARDENED PROFILE
+The hardened host is installed as
+.Pa /usr/local/libexec/safe-fill-host ,
+mode 6750, owner
+.Em _tatl ,
+group
+.Em safe-tatl .
+Only members of
+.Em safe-tatl
+can run it.
+The set-group-id bit lets it reach the browser agent's socket, and the
+agent admits
+.Em _tatl
+for
+.Sq D
+only
+.Pq Fl u ,
+restricted to
+.Pa passwords/
+.Pq Fl p .
+Before running
+.Xr wl-copy 1 ,
+the child drops to the real uid and gid and checks that the
+.Em _tatl
+ids can not be regained.
+.Sh ENVIRONMENT
+.Bl -tag -width "SAFE_UNSAFE_MLOCK"
+.It Ev SAFE_SOCK
+Agent socket (not in the hardened build).
+.It Ev XDG_RUNTIME_DIR
+Location of the agent's
+.Pa safe/sock
+pointer file (not in the hardened build).
+.Xr wl-copy 1
+is always given
+.Pa /run/user/<real uid> ,
+not this value.
+.It Ev WAYLAND_DISPLAY
+Passed to
+.Xr wl-copy 1
+if it contains no
+.Ql / .
+No other variable reaches
+.Xr wl-copy 1 .
+.It Ev SAFE_UNSAFE_MLOCK
+If set, a failure to
+.Xr mlock 2
+the secret buffer is not fatal.
+Ignored when the host runs set-user-ID or set-group-ID.
+.El
+.Sh EXIT STATUS
+0 when the password or username was copied or the list was sent, 1
+otherwise.
+.Sh SECURITY CONSIDERATIONS
+The origin comes from the extension.
+Nothing checks it against the page the user is looking at, so a
+compromised extension can ask for any
+.Pa passwords/*
+entry, one request at a time, and nothing limits the rate.
+Any process that can run
+.Nm
+can do the same.
+The same goes for the usernames saved for an origin it names: listing
+is not limited to the page in front of the user either, though it
+cannot enumerate the origins themselves.
+.Pp
+A clipboard reader in the same session that wins the race against the
+paste sees the password.
+The backstop
+.Ql wl-copy --clear
+clears the clipboard whatever it holds by then, including something
+the user copied in the meantime.
+.Pp
+On Linux the host runs under Landlock and seccomp; see
+.Pa README
+for what they allow.
+.Sh SEE ALSO
+.Xr safe 1 ,
+.Xr safe-agent 1 ,
+.Xr safe-fill-migrate 1 ,
+.Xr wl-copy 1
+.Sh AUTHORS
+Part of this fork of Willy Goiffon's
+.Xr safe 1 ;
+see
+.Pa README .

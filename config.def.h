@@ -1,26 +1,40 @@
-/*
- * Base directory to use when storing secrets. This can be overriden
- * with the $SAFE_DIR environment variable or -s flag.
- */
-char safe_dir[] = ".secrets";
 
-/*
- * Path to the executable to use when prompting user for the master
- * password, and no TTY is available.
- * This can be overriden with the $SAFE_ASKPASS environment variable.
- */
-char askpass_path[] = "/usr/X11R6/bin/ssh-askpass";
+static char safe_dir[] = ".secrets";
 
-/*
- * Name of the entry that will hold the master password
- * This entry must exist as it is used to ensure all passwords are
- * encrypted with the same key.
- */
-char master_entry[] = "master";
 
-/*
- * mkdtemp(3) template and snprintf(3) format to use to construct the
- * full path where the agent socket will be created.
- */
-char agent_socktmp[] = "/tmp/safe-XXXXXX"; /* path MUST end with "XXXXXX" */
-char agent_sockfmt[] = "agent.%d";         /* use %d to include agent pid */
+static char askpass_path[] = "/usr/bin/ssh-askpass";
+
+
+static char master_entry[] = "master";
+
+
+static char agent_socktmp[] = "/tmp/safe-XXXXXX";
+static char agent_sockfmt[] = "/agent.%d";
+
+
+#define SAFE_SANDBOX 1
+
+
+#ifndef WL_COPY_PATH
+#define WL_COPY_PATH "/usr/bin/wl-copy"
+#endif
+
+
+#ifndef AGENT_SOCK_PATH
+#define AGENT_SOCK_PATH ""
+#endif
+
+
+#ifndef WL_CLEAR_DELAY_SEC
+#define WL_CLEAR_DELAY_SEC 10
+#endif
+
+
+#ifndef DOAS_PATH
+#define DOAS_PATH "/usr/bin/doas"
+#endif
+
+
+#ifndef HARDENED_SAFE_BIN
+#define HARDENED_SAFE_BIN "/usr/local/bin/safe"
+#endif

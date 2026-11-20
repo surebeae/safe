@@ -122,7 +122,28 @@ restart:
 		(void)write(output, prompt, strlen(prompt));
 	end = buf + bufsiz - 1;
 	p = buf;
-	while ((nr = read(input, &ch, 1)) == 1 && ch != '\n' && ch != '\r') {
+	/*
+	 * Retry on EINTR only if none of our handlers fired.  If one did,
+	 * stop reading so the signal takes effect when it is re-sent below.
+	 */
+	for (;;) {
+		nr = read(input, &ch, 1);
+		if (nr == -1 && errno == EINTR) {
+			int j, fired = 0;
+
+			for (j = 0; j < _NSIG; j++)
+				if (signo[j]) {
+					fired = 1;
+					break;
+				}
+			if (fired)
+				break;
+			continue;
+		}
+		if (nr != 1)
+			break;
+		if (ch == '\n' || ch == '\r')
+			break;
 		if (p < end) {
 			if ((flags & RPP_SEVENBIT))
 				ch &= 0x7f;

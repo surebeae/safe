@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -eu
+
+install -d -o root          -g root       -m 0755 /run/safe
+install -d -o _safe-browser -g safe-tatl -m 0750 /run/safe/browser
+install -d -o _safe-chat    -g safe-chat -m 0750 /run/safe/chat
+
+chmod g+s /run/safe/browser /run/safe/chat

@@ -1,4 +1,4 @@
-.Dd 2019-06-08
+.Dd November 19, 2026
 .Dt SAFE-AGENT 1
 .Os POSIX.1-2017
 .Sh NAME
@@ -6,54 +6,403 @@
 .Nd decryption key agent
 .Sh SYNOPSIS
 .Nm
-.Op Fl hdv
+.Op Fl hdgv
 .Op Fl t Ar timeout
 .Op Fl f Ar socket
+.Op Fl s Ar storedir
+.Op Fl u Ar uid
+.Op Fl p Ar prefix
+.Op Fl e Ar peer-exe
+.Op Fl c Ar confirm-cmd
+.Op Fl S Ar lsm-label
 .Sh DESCRIPTION
-.Nm
-can retain a derivated key and its salt in memroy, and send it over a
-UNIX-domain socket to whichever process can read this socket.
+This is a fork of Willy Goiffon's
+.Xr safe-agent 1 ;
+see
+.Xr safe 1
+for a summary of the changes.
 .Pp
-Pushing a key and its salt is done by writing them to the socket. The
-retained key can be instantly forgotten by sending signal
-.Ar SIGUSR1 or SIGALRM
-to the running agent.
-.El
+.Nm
+retains a derived key and its salt in memory and serves a
+UNIX-domain socket.
+It never returns the key: clients send it entry paths and data, and
+the agent decrypts or encrypts for them
+.Pq see Sx PROTOCOL .
+Which client may ask for what is decided by uid, not only by the
+socket's file permissions.
+.Pp
+The retained key can be instantly forgotten by sending
+.Dv SIGUSR1
+or
+.Dv SIGALRM
+to the running agent, or with
+.Nm safe Fl F .
+.Dv SIGINT ,
+.Dv SIGTERM
+or
+.Dv SIGHUP
+forget the key, remove the socket, the pid file and the
+.Pa $XDG_RUNTIME_DIR/safe/sock
+pointer if it names this agent, and, when the socket directory was
+created by the agent, that directory as well.
+.Pp
+The agent prints two
+.Xr sh 1
+commands to stdout that can be evaluated by the calling shell to export
+the connection parameters to the environment:
+.Bd -literal
+  SAFE_PID=<pid>; export SAFE_PID
+  SAFE_SOCK=<path>; export SAFE_SOCK
+.Ed
+.Pp
+Later calls to
+.Xr safe 1
+will use these environment variables to retrieve the key instead of
+prompting for the master password.
+.Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl h
 Print a quick usage text.
 .It Fl d
 Do not detach the process from the controlling terminal.
+No readiness handshake is performed in this mode; the caller is
+responsible for waiting for the socket to appear.
+.It Fl g
+Widen the socket mode from 0600 to 0660 so a peer in the socket's
+group can connect.
+The parent directory's setgid bit makes the socket inherit the
+directory's group.
+Use with
+.Fl p
+to restrict what that group peer can ask for; without
+.Fl p
+the group peer gets access to the entire store, and the agent prints
+a warning at startup.
+This is what lets the hardened profile's native messaging host,
+running as
+.Em _tatl:safe-tatl ,
+reach the browser agent.
 .It Fl v
 Turn on verbose mode.
 .Nm
-will print debugging messages to stderr. This is useful to troubleshoot
-connection issues between the agent and the client.
+prints debugging messages to stderr.
+This is useful to troubleshoot connection issues between the agent
+and the client.
+In the default (background) mode, stderr is normally redirected to
+.Pa /dev/null ;
+.Fl v
+preserves it.
 .It Fl t Ar timeout
 Retain the key for
 .Ar timeout
-seconds. This will setup an
-.Xr alarm 2
-timer, which make the agent forget the key after the timeout.
+seconds, then forget it via
+.Xr alarm 2 .
+.Ar timeout
+must be non-negative; 0 disables the timeout.
+A timeout is required: without
+.Fl t ,
+or with
+.Fl t Ar 0 ,
+the agent refuses to start unless
+.Ev SAFE_UNSAFE_TIMEOUT
+is set, and then prints a warning.
 .It Fl f Ar socket
-Bind agent to
+Bind the agent to the
 .Ar socket
 UNIX-domain socket.
-(default: /tmp/safe-XXXXXX/agent.ppid)
-.Pp
-The agent prints will print commands (
-.Xr sh 1 )
-to stdout, that can be evaluated by the calling shell for exportation
-to the environment.
-.Pp
-Later calls to
+The parent directory of
+.Ar socket
+must be owned by the current user and must not grant write to group
+or any access to others (mode 0700 or, in the hardened profile,
+0750 with the setgid bit for the shared group).
+(default: /tmp/safe-XXXXXX/agent.<pid>)
+.It Fl s Ar storedir
+Directory containing the encrypted secrets.
+The path is resolved with
+.Xr realpath 3
+and opened with
+.Dv O_NOFOLLOW
+at startup; the
+.Sq D
+command opens files relative to that directory, and
+.Xr landlock 2
+permits reads beneath it.
+(default:
+.Ev SAFE_DIR ,
+then the compiled-in default,
+.Pa .secrets )
+.It Fl u Ar uid
+Additionally allow the given
+.Ar uid
+to send
+.Sq D .
+The agent's own euid is always allowed.
+.Sq P ,
+.Sq I
+and
+.Sq E
+are never extended by this flag: they are restricted to the agent's
+euid regardless.
+Used in the hardened profile, where the browser agent runs as
+.Em _safe-browser
+and its only
+.Sq D
+client is the setuid native messaging host running as
+.Em _tatl .
+.It Fl p Ar prefix
+Restrict
+.Sq D
+and
+.Sq E
+to paths beginning with
+.Ar prefix ,
+which must end with
+.Sq / .
+The prefix check runs after the full path validation described
+under
+.Sx PROTOCOL ;
+it is a second check, not the only one.
+Omit for an agent that serves the entire store.
+.It Fl e Ar peer-exe
+Not available in sandboxed builds (the default on Linux x86_64 and
+aarch64): the agent refuses to start with it, because seccomp forbids
+the
+.Xr readlink 2
+it needs.
+Require the peer's
+.Pa /proc/<pid>/exe
+to resolve to exactly
+.Ar peer-exe
+in addition to the uid check.
+This uses
+.Xr readlink 2
+on
+.Pa /proc/<pid>/exe ,
+which is subject to
+.Xr ptrace 2
+access checks (same euid, or
+.Dv CAP_SYS_PTRACE ) .
+In the hardened profile the agent
+.Pq Em _safe-browser
+and the native messaging host
+.Pq Em _tatl
+run as different uids, so
+.Fl e
+will reject every request unless the agent runs as the same uid as
+the peer; do not pass
+.Fl e
+in the hardened profile.
+Intended for the default profile, where it closes code execution as
+the user through a route other than the installed
+.Pa safe-fill-host .
+The agent prints a warning at startup if the check cannot work
+because the current process cannot read
+.Pa /proc/1/exe .
+.It Fl c Ar confirm-cmd
+Not available in sandboxed builds: the agent refuses to start with it,
+because seccomp forbids the
+.Xr fork 2
+and
+.Xr execve 2
+it needs.
+Run
+.Ar confirm-cmd
+with the requested path as its last argument before every
+.Sq D ;
+nonzero exit rejects the request.
+Runs as the agent's euid.
+Off by default.
+In the default profile the command runs as the user and can reach
+the display; in the hardened profile it runs as
+.Em _safe-browser
+and will fail unless the command is setuid, which is treated as
+"user denied" (fail closed).
+The command is split on whitespace; a command that needs to embed
+spaces in an argument should be wrapped in a small script.
+.It Fl S Ar lsm-label
+Require the peer's
+.Xr SO_PEERSEC 2
+label to equal
+.Ar lsm-label .
+This is the LSM layer (SELinux, AppArmor, Smack) above
+.Xr SO_PEERCRED 2 ;
+it has no effect until an LSM policy is installed for the agent and
+the peer, and on systems without
+.Dv SO_PEERSEC
+every peer is rejected, which is the safe direction.
+.El
+.Sh PROTOCOL
+Each connection begins with a single-byte command:
+.Bl -tag -width Ds -compact
+.It Sy P
+Owner only.
+Followed by a 48-byte blob (16-byte salt, then a 32-byte
+.Xr crypto_secretstream_xchacha20poly1305 3
+key) and one flag byte: 0 for a persistent key, 1 for a one-shot key,
+forgotten after the next successful
+.Sq D
+or
+.Sq E .
+The agent replaces its retained key with the blob, resets its timeout
+and answers with a single
+.Ql K .
+If the 49 bytes do not all arrive within 5 seconds each, or the flag
+byte is neither 0 nor 1, nothing is answered and the previously
+retained key, if any, is kept.
+.It Sy I
+Owner only.
+The agent replies
+.Ql K ,
+a status byte (0: no key, 1: the key opens this store's master entry,
+2: a key is loaded but is not this store's key), and the store
+directory's
+.Va st_dev
+and
+.Va st_ino
+as two big-endian 64-bit integers.
+Clients use it to check that the agent serves the store they are using.
+.It Sy E
+Owner only.
+Followed by a 4-byte big-endian length and the path.
+The agent replies
+.Ql K ,
+the 40-byte header and the 24-byte stream header.
+The client then sends the plaintext in frames: a 4-byte big-endian
+length (at most 8192) followed by that many bytes.
+A frame shorter than 8192 bytes, possibly empty, is the last one.
+The agent answers every frame with its ciphertext chunk; the last,
+short frame is padded first, so its reply is the padded size (see
+.Xr safe-store 5 )
+plus 17 bytes, and every other reply is the frame length plus 17.
+The concatenated reply is a complete format 0x12 store entry bound to
+its header and the path.
+A client reads the version in the returned header: an agent from
+before format 0x12 returns version 0x11 and does not pad.
+The key never leaves the agent.
+The same path rules as for
+.Sq D
+apply; the master entry is refused, the total is capped at 64 MiB and
+the whole exchange at 60 seconds.
+.It Sy F
+Accepted from the agent's euid and from root.
+The agent forgets its key and answers
+.Ql K .
+Used by
+.Nm safe Fl F .
+.It Sy D
+Accepted from the agent's euid and from the
+.Fl u
+uid.
+Followed by a 4-byte big-endian length and that many bytes of
+path, no trailing NUL.
+The agent validates the path with the same rules
 .Xr safe 1
-will use these environment variables internally to retrieve the key and
-use it to encrypt/decrypt the stored secrets.
+uses (no absolute paths, no
+.Ql .. ,
+no
+.Ql // ,
+no leading
+.Ql ./ ,
+no trailing
+.Ql / ) ,
+rejects it if
+.Fl p
+was given and the path does not begin with the prefix, and opens
+it beneath
+.Fl s
+with
+.Dv O_NOFOLLOW .
+The path is used as AEAD associated data, so a file whose name was
+changed by an attacker does not decrypt under its new name.
+The whole entry is authenticated before anything is sent.
+Entries of format 0x11 and 0x12 are both served; the padding of a 0x12
+entry is removed, so the length is that of the stored plaintext.
+The reply is
+.Ql K ,
+a 4-byte big-endian plaintext length and the plaintext; a failure
+produces no output at all.
+The master entry is verified but its (constant) payload is not
+released.
+If the agent has no key loaded, the connection is closed without
+writing.
+.It Sy L
+Accepted from the agent's euid and from the
+.Fl u
+uid.
+Followed by a 4-byte big-endian length and a directory path, checked
+like a
+.Sy D
+path.
+With
+.Fl p
+the directory must lie strictly beneath the prefix
+.Pq Ql passwords/example.org ,
+so a client can list the accounts saved for a site it names but not
+the list of sites; without
+.Fl p
+only the agent's euid may list.
+The directory is opened beneath
+.Fl s
+without following symbolic links and is not descended into.
+The reply is
+.Ql K ,
+a 4-byte big-endian length and the names of the regular files in it
+that are valid usernames (see
+.Xr safe-fill-host 1 ) ,
+separated by newlines, in directory order.
+At most 256 names and 16 KiB are returned.
+A missing directory is an empty list.
+Nothing is decrypted, so a name is listed whether or not its entry
+authenticates.
+If the agent has no key loaded, the connection is closed without
+writing, so a locked agent does not disclose names.
+Used by
+.Xr safe-fill-host 1
+to copy a username.
+.El
+.Pp
+Any other command byte is ignored and the connection is closed.
+The per-connection deadline is 5 seconds and applies independently of
+the
+.Fl t
+timeout, which governs how long the agent retains a loaded key.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /tmp/safe-XXXXXX/agent.<pid>
+Default socket path.
+The temporary directory is created with
+.Xr mkdtemp 3
+mode 0700 and the socket is bound with mode 0600.
+.It Pa <socket_dir>/agent.pid
+Written by the agent after binding the socket, mode 0640, owned by
+the agent's euid.
+Contains the agent's pid as a decimal integer followed by a newline,
+for scripts and service managers.
+The tools in this tree do not read it.
+.It Pa $XDG_RUNTIME_DIR/safe/sock
+When
+.Ev XDG_RUNTIME_DIR
+is set, the agent writes its socket path here, so
+.Xr safe 1
+.Fl F
+and
+.Xr safe-fill-host 1
+can find it without
+.Ev SAFE_SOCK .
+Removed on exit if it still names this agent.
+.El
+.Pp
+In the default socket name, <pid> is the pid of the process that was
+started; the agent that serves the socket is its forked child, whose
+pid is printed as
+.Ev SAFE_PID .
+With
+.Fl d
+they are the same.
 .Sh EXAMPLES
-Retrieve a secret from your safe, using the agent
+Retrieve a secret from your safe using the agent:
 .Bd -literal
-  $ eval $(safe-agent)
+  $ eval $(safe-agent -t 900)
   $ safe -r
   password:
   $ safe secret/file > kitten.gif
@@ -61,14 +410,168 @@ Retrieve a secret from your safe, using the agent
 .Sh ENVIRONMENT
 .Bl -tag -width "SAFE_SOCK"
 .It Ev SAFE_PID
-Stores the PID of the currently running agent.
+Set by the shell commands printed by
+.Nm .
+Stores the PID of the running agent.
 .It Ev SAFE_SOCK
-Stores the path to the UNIX-domain socket used to communicate with
-the agent.
+Set by the shell commands printed by
+.Nm .
+Stores the path to the UNIX-domain socket used to communicate with the
+agent.
+.It Ev SAFE_UNSAFE_MLOCK
+If set, downgrade
+.Xr mlock 2
+failures from fatal errors to warnings.
+The agent locks only a few tens of kB, so the default limit of most
+systems suffices; the hardened setup does not set this variable and
+its verify step fails if it is set.
+.It Ev SAFE_UNSAFE_TIMEOUT
+If set, allow
+.Fl t Ar 0 ,
+or no
+.Fl t ,
+to disable the idle backstop.
+Without this variable the agent refuses to start without a nonzero
+timeout.
+.It Ev SAFE_ALLOW_NO_LANDLOCK
+If set, run without Landlock when the kernel does not support it
+(sandboxed Linux builds only).
+.It Ev SAFE_DIR
+Store directory when
+.Fl s
+is not given.
+.It Ev XDG_RUNTIME_DIR
+Where the socket path is published; see
+.Sx FILES .
 .El
-.Sh SEE ALSO
+.Sh SECURITY CONSIDERATIONS
+The agent socket is bound inside a per-agent
+.Xr mkdtemp 3
+directory with mode 0700.
+In the hardened profile the socket lives under
+.Pa /run/safe/<store>/
+(mode 0750, setgid, owned by the agent's euid) and the socket is
+mode 0660, group-inherited from the directory so the shared group
+can connect.
+Both the socket and its parent directory are validated by
 .Xr safe 1
+before use: the parent must be owned by the calling user and must
+not grant write to group or any access to others, and the socket
+itself must be owned by the same user.
+.Pp
+The agent distinguishes its clients by uid using
+.Dv SO_PEERCRED ,
+not just by Unix file permissions on the socket.
+The
+.Sq D
+command requires the peer uid to be the agent's own euid, or the
+.Ar uid
+given with
+.Fl u ;
+the master entry is only verified for the agent's own euid and is
+refused to the
+.Fl u
+uid.
+The
+.Sq P ,
+.Sq I
+and
+.Sq E
+commands require exactly the agent's euid and are never extended by
+.Fl u .
+.Sq F
+is accepted from the agent's euid and from root.
+Thus
+.Fl u
+grants decrypt access only; there is no command that returns the key.
+In the hardened profile this is what confines the setuid native
+messaging host to browser passwords; it can ask for decryptions of
+.Pa passwords/* ,
+but cannot ask for the key.
+.Pp
+With
+.Fl e ,
+the peer's executable is checked via
+.Pa /proc/<pid>/exe
+after
+.Xr SO_PEERCRED 2 ;
+a mismatch closes the connection before the command byte is read.
+This is a default-profile defense only; see
+.Fl e
+above for the ptrace-access caveat.
+.Pp
+With
+.Fl S ,
+the peer's
+.Xr SO_PEERSEC 2
+label is checked before the command byte is read.
+Without an LSM policy the label is generic and the check is
+effectively disabled by the empty default; with
+.Fl S
+set, every peer whose label does not match exactly is rejected.
+On systems without
+.Dv SO_PEERSEC
+the check fails closed: every peer is rejected.
+.Pp
+With
+.Fl c ,
+every
+.Sq D
+is preceded by a confirmation command.
+The confirmation runs before the store is opened, so an attacker
+cannot probe which paths exist without user approval.
+A nonzero exit or a signalled interruption
+.Pq Dv SIGUSR1 No for forget, Dv SIGINT/SIGTERM No for quit
+is treated as denial.
+.Pp
+The key is stored in memory that has been
+.Xr mlock 2 Ns 'd
+with
+.Xr sodium_mlock 3 ;
+if locking fails, the agent exits unless
+.Ev SAFE_UNSAFE_MLOCK
+is set.
+.Ic safe-hardened-setup
+writes systemd units; pass it
+.Fl m Ar bytes
+to add a
+.Ql LimitMEMLOCK=
+line if the service manager's default limit is too low.
+The derived key and the two secretstream buffers are all
+.Nm mlock Ns 'd .
+.Pp
+When
+.Dv SIGUSR1
+or
+.Dv SIGALRM
+is delivered while a
+.Sq D
+is in progress, the request completes with the key that was loaded
+at accept time, and the key is zeroed after the response is written.
+The signal is observed at the next iteration of the accept loop.
+This is the intended behavior: the request was already authorized
+when the signal arrived.
+.Pp
+On Linux, release builds enable
+.Xr seccomp 2
+and
+.Xr landlock 2
+sandboxing and disable core dumps and
+.Xr ptrace 2 .
+These are disabled when the code is compiled with
+.Dv _DEBUG .
+.Pp
+The agent serves one connection at a time, with a 5-second deadline
+for each read (60 seconds for a whole
+.Sq E ) .
+Any process that may connect to the socket can delay other clients by
+that much per connection.
+.Sh SEE ALSO
+.Xr safe 1 ,
+.Xr safe-fill-host 1 ,
 .Xr safe-store 5
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org
-
+.Pp
+Modifications in this fork: see
+.Pa README .

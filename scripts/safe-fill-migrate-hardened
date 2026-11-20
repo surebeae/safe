@@ -1,0 +1,126 @@
+#!/bin/sh
+#
+# usage: safe-fill-migrate-hardened [-mnf] <profile-dir>
+#
+# safe-fill-migrate as _safe-browser on /var/lib/safe/browser.  Needs an
+# unlocked browser agent and a rule keeping SAFE_SOCK:
+#   doas:    permit persist setenv { SAFE_SOCK } <you> as _safe-browser \
+#                cmd /usr/local/bin/safe
+#   sudoers: Defaults!/usr/local/bin/safe env_keep += "SAFE_SOCK"
+#            <you> ALL=(_safe-browser) NOPASSWD: /usr/local/bin/safe
+# Without doas, a shim around sudo -n is used.
+
+set -eu
+
+AGENT_SOCK=/run/safe/browser/agent.sock
+STORE=/var/lib/safe/browser
+SWITCH_USER=_safe-browser
+
+usage() {
+	echo "usage: $0 [-mnf] <profile-dir>" >&2
+	exit 1
+}
+
+case "${1:-}" in
+	-h|--help)
+		sed -n '2,/^[^#]/p' "$0" | sed -n 's/^# \{0,1\}//p'
+		exit 0
+		;;
+esac
+
+if [ "$(id -u)" -eq 0 ]; then
+	echo "error: run as the invoking user, not root" >&2
+	exit 1
+fi
+
+[ "$#" -ge 1 ] || usage
+
+PROFILE=
+n=$#
+while [ "$n" -gt 0 ]; do
+	a=$1; shift; n=$((n - 1))
+	case "$a" in
+	-?*)
+		case ${a#-} in
+		*[!mnf]*)
+			echo "error: $a not allowed here" >&2
+			echo "       (this wrapper pins -U $SWITCH_USER and -s $STORE)" >&2
+			exit 1
+			;;
+		esac
+		set -- "$@" "$a"
+		;;
+	*)
+		[ -z "$PROFILE" ] || usage
+		PROFILE=$a
+		;;
+	esac
+done
+[ -n "$PROFILE" ] || usage
+
+[ -d "$PROFILE" ] || {
+	echo "error: $PROFILE not a directory" >&2
+	exit 1
+}
+
+PROFILE=$(cd -- "$PROFILE" && pwd -P) || {
+	echo "error: cannot resolve $PROFILE" >&2
+	exit 1
+}
+
+[ -r "$PROFILE/logins.db" ] || {
+	echo "error: $PROFILE/logins.db not readable" >&2
+	exit 1
+}
+[ -r "$PROFILE/key4.db" ] || {
+	echo "error: $PROFILE/key4.db not readable" >&2
+	exit 1
+}
+
+[ -S "$AGENT_SOCK" ] || {
+	echo "error: $AGENT_SOCK not present" >&2
+	echo "       is safe-browser-agent running?" >&2
+	exit 1
+}
+
+[ -d "$STORE" ] || {
+	echo "error: $STORE not present" >&2
+	exit 1
+}
+
+SAFE_FILL_MIGRATE=${SAFE_FILL_MIGRATE:-/usr/local/bin/safe-fill-migrate}
+[ -x "$SAFE_FILL_MIGRATE" ] || {
+	echo "error: $SAFE_FILL_MIGRATE not executable" >&2
+	exit 1
+}
+
+if ! command -v doas >/dev/null 2>&1; then
+	if ! command -v sudo >/dev/null 2>&1; then
+		echo "error: safe-fill-migrate -U needs doas or sudo on PATH" >&2
+		exit 1
+	fi
+	_shimdir=$(mktemp -d) || exit 1
+	trap 'rm -rf "$_shimdir"' EXIT INT TERM
+	cat > "$_shimdir/doas" <<'SHIM'
+#!/bin/sh
+user=
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-u) user=$2; shift 2 ;;
+	--) shift; break ;;
+	*) break ;;
+	esac
+done
+# SAFE_SOCK reaches safe through sudoers env_keep; running env(1) as
+# the target user instead would need a rule that also allows a shell.
+exec sudo -n -u "$user" -- "$@"
+SHIM
+	chmod 755 "$_shimdir/doas"
+	PATH="$_shimdir:$PATH"
+	export PATH
+fi
+
+SAFE_SOCK=$AGENT_SOCK
+export SAFE_SOCK
+
+exec "$SAFE_FILL_MIGRATE" -U "$SWITCH_USER" -s "$STORE" "$@" "$PROFILE"

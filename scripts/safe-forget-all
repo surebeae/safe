@@ -1,0 +1,28 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+	if command -v sudo >/dev/null 2>&1; then
+		exec sudo /usr/local/bin/safe-forget-all "$@"
+	elif command -v doas >/dev/null 2>&1; then
+		exec doas /usr/local/bin/safe-forget-all "$@"
+	else
+		echo "error: need root; install sudo or doas" >&2
+		exit 1
+	fi
+fi
+
+SAFE=/usr/local/bin/safe
+rc=0
+
+for sock in /run/safe/chat/agent.sock /run/safe/browser/agent.sock; do
+	[ -S "$sock" ] || continue
+	if SAFE_SOCK=$sock "$SAFE" -F; then
+		echo "forgot $sock"
+	else
+		echo "failed to forget $sock" >&2
+		rc=1
+	fi
+done
+exit "$rc"

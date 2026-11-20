@@ -1,0 +1,367 @@
+.Dd November 19, 2026
+.Dt SAFE-FILL-MIGRATE 1
+.Os POSIX.1-2017
+.Sh NAME
+.Nm safe-fill-migrate
+.Nd migrate Firefox saved passwords into safe
+.Sh SYNOPSIS
+.Nm
+.Op Fl mnf
+.Op Fl U Ar user
+.Op Fl s Ar safe-dir
+.Ar profile-dir
+.Sh DESCRIPTION
+.Nm
+decrypts the saved logins of the Firefox profile
+.Ar profile-dir
+using the keys already present in its
+.Pa key4.db ,
+and stores each password in
+.Xr safe 1
+under
+.Pa passwords/<host>/<user> .
+Firefox's store is only read; the passwords stay there until you
+remove them in Firefox
+.Pq Ql about:logins
+once fills from safe work.
+.Pp
+Two stores are read:
+.Bl -tag -width Ds
+.It Pa logins.json
+Desktop Firefox.
+Each username and password is decrypted with NSS's secret decoder
+ring
+.Pq Fn PK11SDR_Decrypt ,
+using the profile's default key.
+.It Pa logins.db
+The SQLite store of Mozilla's application-services logins component,
+encrypted with the
+.Dq as-logins-key
+in
+.Pa key4.db .
+.El
+.Pp
+.Pa logins.db
+is used if it holds any live login; otherwise
+.Pa logins.json
+is.
+A profile can have an empty
+.Pa logins.db
+next to the
+.Pa logins.json
+that holds its logins.
+If the profile has a Firefox primary password, it is asked for on the
+terminal.
+.Pp
+Expects a running
+.Xr safe-agent 1
+with the store's key loaded, so that every
+.Xr safe 1
+invocation goes through the agent and the master password is not
+asked for.
+.Nm
+does not enforce this: if the agent is locked, or serves a different
+store,
+.Xr safe 1
+falls back to prompting for the master password on the terminal, once
+per entry.
+Unlock the agent first.
+The key never appears on the command line or in the process environment.
+.Pp
+Entries are skipped, and counted as skipped, when they can not be
+represented as an entry that
+.Xr safe-fill-host 1
+can fill:
+.Bl -bullet -compact
+.It
+plain-http origins (loopback excepted);
+.It
+logins with an empty username (reported as
+.Dq parse failed ) ;
+.It
+origins or usernames that fail the checks in
+.Xr safe-fill-host 1 ,
+for example IPv6 literal origins or usernames containing
+.Ql / ;
+.It
+entries that do not decrypt with the profile's key.
+.El
+.Pp
+Origins are lowercased and the default port is removed, so
+.Ql https://Example.org:443
+becomes
+.Pa passwords/example.org/<user> .
+.Pp
+In the hardened profile,
+.Nm
+runs as the invoking user and execs
+.Xr safe 1
+as
+.Em _safe-browser
+through
+.Xr doas 1
+via
+.Fl U ;
+see
+.Sx HARDENED PROFILE
+below.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl m
+Migrate: decrypt every saved login and write it to
+.Xr safe 1 .
+The only mode; accepted for compatibility.
+The former blank mode,
+.Fl b ,
+was removed and is refused.
+.It Fl n
+Dry run.
+Prints what would be migrated without writing to
+.Xr safe 1 .
+.It Fl f
+Overwrite an existing
+.Xr safe 1
+entry.
+Without
+.Fl f ,
+an entry that already exists causes that row to be reported as failed.
+.It Fl U Ar user
+Switch to
+.Ar user
+for the
+.Xr safe 1
+invocations: each is exec'd through
+.Xr doas 1
+with
+.Dv SAFE_SOCK
+preserved by the doas rule's
+.Ql setenv { SAFE_SOCK }
+directive
+.Po
+.Ql keepenv { SAFE_SOCK }
+on doas versions that need that spelling
+.Pc .
+.Nm
+runs
+.Ql doas
+from
+.Ev PATH ;
+.Pa scripts/safe-fill-migrate-hardened
+puts a doas-compatible shim around
+.Ql sudo -n
+there when doas is not installed, which needs
+.Ql Defaults!/usr/local/bin/safe env_keep += \(dqSAFE_SOCK\(dq
+in sudoers.
+Required in the hardened profile, where the browser store is owned by
+.Em _safe-browser
+while
+.Nm
+itself runs as the invoking user and needs that user's access to
+.Pa logins.db .
+The doas rule
+.Ql permit persist setenv { SAFE_SOCK } :wheel as _safe-browser cmd /usr/local/bin/safe
+must be present;
+without it every
+.Xr safe 1
+invocation fails and every row is reported as failed.
+With
+.Fl U ,
+.Nm
+skips the parent-side ownership and permission checks on
+.Dv SAFE_SOCK
+and its directory: the socket is owned by the target user, and its
+parent directory is not traversable by the invoking user.
+The doas child re-validates the socket after the uid switch.
+.It Fl s Ar safe-dir
+Directory holding the
+.Xr safe 1
+store.
+If omitted, falls back to
+.Ev SAFE_DIR ,
+then to the compiled-in default.
+.El
+.Sh HARDENED PROFILE
+In the hardened profile the browser agent runs as
+.Em _safe-browser ,
+its store lives at
+.Pa /var/lib/safe/browser ,
+and its socket is at
+.Pa /run/safe/browser/agent.sock .
+.Nm
+cannot run as
+.Em _safe-browser
+directly: it must read the Firefox profile under the invoking user's
+home, which
+.Em _safe-browser
+cannot traverse.
+Nor can it run as the invoking user alone: that user cannot write into
+.Pa /var/lib/safe/browser
+or connect to the agent socket, both of which belong to
+.Em _safe-browser .
+.Pp
+The two-uid split is handled inside
+.Nm :
+every
+.Xr safe 1
+subprocess is exec'd through
+.Xr doas 1
+.Fl u Ar user ,
+so the parser, the NSS key extraction, and the
+.Pa logins.db
+writes all run as the invoking user, while the
+.Xr safe 1
+read/write of the store and the agent connection all run as
+.Em _safe-browser .
+The caller provides
+.Dv SAFE_SOCK
+and the doas rule preserves it across the uid switch.
+.Pp
+The wrapper
+.Pa scripts/safe-fill-migrate-hardened
+sets
+.Dv SAFE_SOCK No to Pa /run/safe/browser/agent.sock ,
+passes
+.Fl U Ar _safe-browser
+and
+.Fl s Ar /var/lib/safe/browser ,
+and forwards
+.Fl m , Fl n , Fl f
+to
+.Nm .
+It rejects caller-supplied
+.Fl U
+and
+.Fl s
+so the hardened invocation cannot be redirected.
+.Sh ENVIRONMENT
+.Bl -tag -width "SAFE_SOCK"
+.It Ev SAFE_DIR
+Location of the
+.Xr safe 1
+store.
+Overridden by
+.Fl s .
+.It Ev SAFE_SOCK
+Path to the UNIX-domain socket bound by
+.Xr safe-agent 1 .
+Required; the tool refuses to run without it.
+In the hardened profile this must be
+.Pa /run/safe/browser/agent.sock ;
+the doas rule's
+.Ql setenv { SAFE_SOCK }
+is what preserves it across the uid switch.
+.It Ev SAFE_PID
+Printed in the header for informational purposes.
+Optional.
+.It Ev SAFE_BIN
+Path to the
+.Xr safe 1
+binary.
+If unset,
+.Nm
+searches
+.Ev PATH
+for a
+.Pa safe
+that is a regular executable owned by root or by the calling user
+and not writable by group or others.
+.It Ev SAFE_UNSAFE_MLOCK
+If set, downgrade
+.Xr mlock 2
+failures for the key and plaintext buffer from fatal to warning.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa <profile-dir>/logins.json
+Desktop Firefox's password store.
+Only read.
+.It Pa <profile-dir>/logins-backup.json
+Firefox's own backup of
+.Pa logins.json ;
+it holds the passwords too.
+Not read.
+.It Pa <profile-dir>/logins.db
+Application-services password store.
+Only read.
+.It Pa <profile-dir>/key4.db
+NSS key database.
+Only read.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Dry-run the migration, leaving Firefox open:
+
+.Dl $ safe-fill-migrate -n ~/.config/mozilla/firefox/*.default/
+.Pp
+Migrate every entry to
+.Xr safe 1
+without touching Firefox:
+
+.Dl $ safe-fill-migrate ~/.config/mozilla/firefox/*.default/
+.Pp
+Same, in the hardened profile, via the wrapper:
+
+.Bd -literal -offset indent
+$ safe-unlock browser
+$ safe-fill-migrate-hardened ~/.mozilla/firefox/*.default-release
+.Ed
+.Sh SECURITY CONSIDERATIONS
+The migration only copies the passwords: they stay in Firefox's
+store, in
+.Pa logins-backup.json ,
+and in any synced copy on the Sync server or other devices until you
+remove them in Firefox.
+.Pp
+Plaintext passwords exist in memory only for the duration of one
+.Xr safe 1
+invocation each and never touch disk.
+The key and plaintext buffer are
+.Xr mlock 2 Ns 'd;
+core dumps are disabled.
+.Pp
+.Nm
+must never be installed setuid.
+A compromised
+.Nm
+leaks Firefox passwords, which is already the baseline; it has no
+privilege the invoking user does not have.
+The setuid design is confined to
+.Xr safe-fill-host 1 ,
+whose attack surface is exactly the native messaging frame.
+.Pp
+With
+.Fl U ,
+the
+.Xr safe 1
+subprocesses get the environment doas or sudo builds for the target
+user, plus
+.Dv SAFE_SOCK ,
+which the rule preserves explicitly.
+.Pp
+The doas or sudoers rule that
+.Fl U
+needs lets any process running as the invoking user run
+.Xr safe 1
+as
+.Em _safe-browser
+with any arguments, and so decrypt or overwrite browser entries
+through the agent without the master password.
+Remove the rule after the migration if that matters to you.
+.Pp
+Granting
+.Xr doas 1
+the
+.Ql env
+command instead of
+.Ql setenv { SAFE_SOCK } ,
+or permitting
+.Ql env
+in sudoers, would let the invoking user run any command as
+.Em _safe-browser ,
+which defeats the compartmentalization.
+.Sh SEE ALSO
+.Xr safe 1 ,
+.Xr safe-agent 1 ,
+.Xr safe-fill-host 1 ,
+.Xr safe-store 5

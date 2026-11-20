@@ -1,0 +1,515 @@
+#!/bin/sh
+#
+# usage: safe-hardened-setup [-fnr] [-u user] [-e extension-id] [-m bytes] [step ...]
+#
+#   -f   replace differing files (backups in /var/backups/safe-hardened)
+#   -n   dry run: print what would be done
+#   -r   restart both agents even if nothing changed
+#   -u   the login user whose Firefox uses tatl (default: invoking user)
+#   -e   extension id for the native-messaging manifest
+#   -m   write "LimitMEMLOCK=BYTES" into the agent service files
+#
+# steps, in order: users dirs services manifest doas restart verify next
+#
+# SAFE_SETUP_ROOT=DIR works on a copy of the tree (no users, services).
+
+set -eu
+
+PREFIX=${PREFIX:-/usr/local}
+ROOT=${SAFE_SETUP_ROOT:-}
+SKIP_SYS=
+[ -z "$ROOT" ] || SKIP_SYS=1
+FORCE=0
+DRY=0
+RESTART=0
+MEMLOCK=
+EXT_ID=tatl@sure.disroot.org
+LOGIN_USER=${DOAS_USER:-${SUDO_USER:-}}
+BACKUP_DIR=$ROOT/var/backups/safe-hardened
+WROTE=0
+BROWSER_DIRTY=0
+CHAT_DIRTY=0
+fail=0
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+bad() { printf 'FAIL     %s\n' "$*" >&2; fail=1; }
+run() {
+	if [ "$DRY" -eq 1 ]; then
+		say "+ $*"
+	else
+		"$@"
+	fi
+}
+
+usage() {
+	sed -n '2,/^$/p' "$0" | sed -n 's/^# \{0,1\}//p'
+	exit 1
+}
+
+while getopts fnru:e:m: opt; do
+	case $opt in
+	f) FORCE=1 ;;
+	n) DRY=1 ;;
+	r) RESTART=1 ;;
+	u) LOGIN_USER=$OPTARG ;;
+	e) EXT_ID=$OPTARG ;;
+	m) MEMLOCK=$OPTARG ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+case $MEMLOCK in
+*[!0-9]*) die "-m takes a number of bytes: $MEMLOCK" ;;
+esac
+
+if [ "$(id -u)" -ne 0 ] && [ -z "$ROOT" ] && [ "$DRY" -eq 0 ]; then
+	if command -v sudo >/dev/null 2>&1; then
+		RE_EXEC=sudo
+	elif command -v doas >/dev/null 2>&1; then
+		RE_EXEC=doas
+	else
+		die "need root: run as root, or install sudo or doas"
+	fi
+	opts=
+	[ "$FORCE" -eq 0 ] || opts="$opts -f"
+	[ "$RESTART" -eq 0 ] || opts="$opts -r"
+	[ -z "$MEMLOCK" ] || opts="$opts -m $MEMLOCK"
+	exec $RE_EXEC /bin/sh "$0" $opts -u "${LOGIN_USER:-$(id -un)}" \
+	    -e "$EXT_ID" "$@"
+fi
+
+case $EXT_ID in
+*[!A-Za-z0-9@._-]*|'') die "bad extension id: $EXT_ID" ;;
+esac
+
+[ $# -gt 0 ] || set -- users dirs services manifest doas restart verify next
+
+have_group() { grep -q "^$1:" /etc/group; }
+have_user()  { id -u "$1" >/dev/null 2>&1; }
+
+NOLOGIN=$(command -v nologin 2>/dev/null || echo /usr/bin/false)
+
+ensure_group() {
+	have_group "$1" && return 0
+	command -v groupadd >/dev/null 2>&1 || die "groupadd not found; create group $1 by hand"
+	run groupadd -r "$1"
+}
+
+ensure_user() {
+	have_user "$1" && return 0
+	command -v useradd >/dev/null 2>&1 || die "useradd not found; create user $1 by hand"
+	if [ -n "${3:-}" ]; then
+		run useradd -r -M -d /var/empty -s "$NOLOGIN" -g "$2" -G "$3" "$1"
+	else
+		run useradd -r -M -d /var/empty -s "$NOLOGIN" -g "$2" "$1"
+	fi
+}
+
+backup() {
+	b=$BACKUP_DIR/$(printf '%s' "${1#"$ROOT"}" | tr / _).$(date +%Y%m%d%H%M%S)
+	run mkdir -p "$BACKUP_DIR"
+	run chmod 0700 "$BACKUP_DIR"
+	run cp -p "$1" "$b"
+	say "backup   $1 -> $b"
+}
+
+put() {
+	dest=$ROOT$1
+	mode=$2
+	own=${3:-}
+	tmp=$(mktemp)
+	cat >"$tmp"
+	if [ -e "$dest" ] && cmp -s "$tmp" "$dest"; then
+		rm -f "$tmp"
+		say "ok       $1"
+		return 0
+	fi
+	if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then
+		say "differs  $1 (kept; run with -f to replace it with:)"
+		diff -u "$dest" "$tmp" || true
+		rm -f "$tmp"
+		return 0
+	fi
+	[ ! -e "$dest" ] || backup "$dest"
+	run mkdir -p "$(dirname "$dest")"
+	run install -m "$mode" "$tmp" "$dest"
+	if [ -n "$own" ] && [ -z "$SKIP_SYS" ]; then
+		run chown "$own" "$dest"
+	fi
+	rm -f "$tmp"
+	WROTE=1
+	if [ "$DRY" -eq 1 ]; then
+		say "would    write $1"
+	else
+		say "wrote    $1"
+	fi
+}
+
+put_str() {
+	put "$1" "$2" "$3" <<EOF
+$4
+EOF
+}
+
+home_of() {
+	if [ -n "$ROOT" ]; then
+		echo "$ROOT/home/$1"
+	else
+		awk -F: -v u="$1" '$1 == u { print $6 }' /etc/passwd
+	fi
+}
+
+agent_unit() {
+	printf '[Unit]\n'
+	printf 'Description=safe %s agent\n' "$1"
+	printf 'After=local-fs.target safe-runtime-setup.service\n'
+	printf 'Wants=safe-runtime-setup.service\n'
+	printf '\n'
+	printf '[Service]\n'
+	printf 'Type=simple\n'
+	printf 'User=%s\n' "$1"
+	printf 'ExecStart=%s/bin/safe-agent %s\n' "$PREFIX" "$2"
+	printf 'EnvironmentFile=%s\n' "$3"
+	printf 'Restart=on-failure\n'
+	printf 'RestartSec=2s\n'
+	[ -z "$MEMLOCK" ] || printf 'LimitMEMLOCK=%s\n' "$MEMLOCK"
+	printf '\n'
+	printf '[Install]\n'
+	printf 'WantedBy=multi-user.target\n'
+}
+
+step_users() {
+	fail=0
+	if [ -n "$SKIP_SYS" ]; then
+		say "skip     users (SAFE_SETUP_ROOT set)"
+		return 0
+	fi
+	ensure_group safe-tatl
+	ensure_group safe-chat
+	ensure_group _tatl
+	ensure_group _safe-browser
+	ensure_group _safe-chat
+	ensure_user _tatl _tatl safe-tatl
+	ensure_user _safe-browser _safe-browser
+	ensure_user _safe-chat _safe-chat
+	if [ -n "$LOGIN_USER" ] && have_user "$LOGIN_USER"; then
+		if id -nG "$LOGIN_USER" | tr ' ' '\n' | grep -qx safe-tatl; then
+			say "ok       $LOGIN_USER is in safe-tatl"
+		else
+			command -v usermod >/dev/null 2>&1 || die "usermod not found; add $LOGIN_USER to safe-tatl by hand"
+			run usermod -aG safe-tatl "$LOGIN_USER"
+			say "added    $LOGIN_USER to safe-tatl: log out and in again so Firefox inherits it"
+		fi
+	else
+		say "note     no login user given (-u); add yours to safe-tatl by hand"
+	fi
+	return "$fail"
+}
+
+step_dirs() {
+	run mkdir -p "$ROOT/var/lib/safe"
+	run mkdir -p "$ROOT/var/lib/safe/browser" "$ROOT/var/lib/safe/chat"
+	run chmod 0700 "$ROOT/var/lib/safe/browser" "$ROOT/var/lib/safe/chat"
+	if [ -z "$SKIP_SYS" ]; then
+		run chown _safe-browser:_safe-browser /var/lib/safe/browser
+		run chown _safe-chat:_safe-chat /var/lib/safe/chat
+	fi
+	say "ok       /var/lib/safe/{browser,chat}"
+}
+
+step_services() {
+	fail=0
+	if [ -n "$SKIP_SYS" ]; then
+		tatl_uid=990
+	else
+		tatl_uid=$(id -u _tatl 2>/dev/null) || die "user _tatl missing; run the users step"
+	fi
+	d=/etc/systemd/system
+	envd=/etc/default
+
+	put_str $d/safe-runtime-setup.service 0644 "" \
+"[Unit]
+Description=safe runtime directories
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=$PREFIX/sbin/safe-runtime-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target"
+
+	WROTE=0
+	put_str $d/safe-browser-agent.service 0644 "" "$(agent_unit _safe-browser \
+	    "-d -s /var/lib/safe/browser -f /run/safe/browser/agent.sock -t 900 -u $tatl_uid -p passwords/ -g" \
+	    $envd/safe-browser-agent)"
+	put_str $envd/safe-browser-agent 0600 root:root ""
+	BROWSER_DIRTY=$WROTE
+
+	WROTE=0
+	put_str $d/safe-chat-agent.service 0644 "" "$(agent_unit _safe-chat \
+	    "-d -s /var/lib/safe/chat -f /run/safe/chat/agent.sock -t 0 -p chat/ -g" \
+	    $envd/safe-chat-agent)"
+	put_str $envd/safe-chat-agent 0600 root:root "SAFE_UNSAFE_TIMEOUT=1"
+	CHAT_DIRTY=$WROTE
+
+	f=$ROOT$d/safe-browser-agent.service
+	if [ -r "$f" ] && grep -qE -- '-t[[:space:]]+0+([[:space:]]|$)' "$f"; then
+		bad "$f has a zero -t: the browser agent must forget its key (re-run with -f)"
+	fi
+	return "$fail"
+}
+
+step_manifest() {
+	fail=0
+	[ -n "$LOGIN_USER" ] || die "no login user: give one with -u"
+	if [ -z "$ROOT" ]; then
+		have_user "$LOGIN_USER" || die "no such user: $LOGIN_USER"
+	fi
+	home=$(home_of "$LOGIN_USER")
+	[ -n "$home" ] || die "cannot find the home directory of $LOGIN_USER"
+	nm=$home/.mozilla/native-messaging-hosts
+	if [ -z "$SKIP_SYS" ]; then
+		grp=$(id -gn "$LOGIN_USER")
+		run install -d -o "$LOGIN_USER" -g "$grp" -m 0755 "${nm%/native-messaging-hosts}" "$nm"
+		owner=$LOGIN_USER:$grp
+	else
+		run mkdir -p "$nm"
+		owner=
+	fi
+	rel=${nm#"$ROOT"}
+	put "$rel/safe_fill.json" 0644 "$owner" <<EOF
+{
+  "name": "safe_fill",
+  "description": "tatl - password fetcher for safe",
+  "path": "$PREFIX/libexec/safe-fill-host",
+  "type": "stdio",
+  "allowed_extensions": ["$EXT_ID"]
+}
+EOF
+	# newer Firefox may use $XDG_CONFIG_HOME/mozilla
+	xdg=$home/.config/mozilla
+	if [ -d "$xdg/firefox" ]; then
+		xnm=$xdg/native-messaging-hosts
+		if [ -z "$SKIP_SYS" ]; then
+			run install -d -o "$LOGIN_USER" -g "$grp" -m 0755 "$xnm"
+		else
+			run mkdir -p "$xnm"
+		fi
+		put "${xnm#"$ROOT"}/safe_fill.json" 0644 "$owner" <<EOF
+{
+  "name": "safe_fill",
+  "description": "tatl - password fetcher for safe",
+  "path": "$PREFIX/libexec/safe-fill-host",
+  "type": "stdio",
+  "allowed_extensions": ["$EXT_ID"]
+}
+EOF
+	fi
+	say "note     snap/flatpak Firefox keeps native-messaging manifests elsewhere"
+	return "$fail"
+}
+
+step_doas() {
+	fail=0
+	conf=$ROOT/etc/doas.conf
+	if [ -r "$conf" ]; then
+		typo=$(grep -nE '[[:space:]]No[[:space:]]+cmd([[:space:]]|$)' "$conf" || true)
+		if [ -n "$typo" ]; then
+			bad "$conf: stray 'No' before 'cmd': $typo"
+		fi
+		if [ -z "$SKIP_SYS" ] && command -v doas >/dev/null 2>&1; then
+			if out=$(doas -C "$conf" 2>&1); then
+				say "ok       $conf parses"
+			else
+				bad "$conf does not parse: ${out:-run: doas -C $conf}"
+			fi
+		fi
+		if grep -q '_safe-browser' "$conf"; then
+			say "ok       a doas rule names _safe-browser"
+		elif grep -Eq '^[[:space:]]*permit[[:space:]].*:wheel[[:space:]]*(#.*)?$' "$conf"; then
+			say "ok       a broad wheel rule covers safe-fill-migrate -U"
+		else
+			say "note     no doas rule lets you run safe as _safe-browser"
+		fi
+		return "$fail"
+	fi
+	if [ -d "$ROOT/etc/sudoers.d" ] || [ -r "$ROOT/etc/sudoers" ]; then
+		if grep -rqs '_safe-browser' "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers" 2>/dev/null; then
+			say "ok       a sudoers rule names _safe-browser"
+		else
+			say "note     no sudoers rule lets you run safe as _safe-browser"
+		fi
+		return "$fail"
+	fi
+	say "note     no doas.conf or sudoers readable here; see the rules printed by the next step"
+	return 0
+}
+
+agent_running() { pgrep -u "$1" -x safe-agent >/dev/null 2>&1; }
+
+step_restart() {
+	fail=0
+	if [ -n "$SKIP_SYS" ]; then
+		say "skip     restart (SAFE_SETUP_ROOT set)"
+		return 0
+	fi
+	run systemctl daemon-reload || true
+	for svc in safe-runtime-setup.service safe-browser-agent.service safe-chat-agent.service; do
+		run systemctl enable "$svc" || true
+	done
+	for pair in safe-browser-agent.service:_safe-browser:"$BROWSER_DIRTY" \
+	    safe-chat-agent.service:_safe-chat:"$CHAT_DIRTY"; do
+		svc=${pair%%:*}
+		rest=${pair#*:}
+		u=${rest%%:*}
+		dirty=${rest#*:}
+		if [ "$RESTART" -eq 0 ] && [ "$dirty" -eq 0 ] && agent_running "$u"; then
+			say "ok       $svc is running with its current configuration (key kept; -r forces a restart)"
+			continue
+		fi
+		run systemctl restart "$svc" || bad "systemctl restart $svc failed"
+		say "restart  $svc (its key is forgotten: run safe-unlock)"
+	done
+	[ "$DRY" -eq 1 ] || sleep 1
+	return "$fail"
+}
+
+step_verify() {
+	fail=0
+	host=$ROOT$PREFIX/libexec/safe-fill-host
+
+	if [ ! -e "$host" ]; then
+		bad "$host missing: run make install-hardened"
+	else
+		[ -u "$host" ] && [ -g "$host" ] || bad "$host is not setuid and setgid"
+		if [ -z "$SKIP_SYS" ]; then
+			ls -l "$host" | awk '{ print "host     " $1 " " $3 ":" $4 }'
+			o=$(ls -l "$host" | awk '{ print $3 ":" $4 }')
+			[ "$o" = _tatl:safe-tatl ] || bad "$host is owned by $o, not _tatl:safe-tatl"
+			case $(ls -l "$host" | awk '{ print substr($1, 10, 1) }') in
+			x|t) say "note     $host is executable by local users; mode 6750 limits it to safe-tatl" ;;
+			esac
+		fi
+	fi
+	if [ -e "$ROOT$PREFIX/bin/safe-fill-host" ]; then
+		say "note     $PREFIX/bin/safe-fill-host is the unprivileged build; you can delete it"
+	fi
+
+	if [ -n "$LOGIN_USER" ]; then
+		m=$(home_of "$LOGIN_USER")/.mozilla/native-messaging-hosts/safe_fill.json
+		if [ -r "$m" ] && grep -q "\"path\": \"$PREFIX/libexec/safe-fill-host\"" "$m"; then
+			say "ok       manifest $m"
+		else
+			bad "manifest $m missing or not pointing at $PREFIX/libexec/safe-fill-host"
+		fi
+	fi
+
+	for e in safe-browser-agent safe-chat-agent; do
+		f=$ROOT/etc/default/$e
+		if [ -r "$f" ] && grep -q '^[[:space:]]*SAFE_UNSAFE_MLOCK' "$f"; then
+			bad "$f sets SAFE_UNSAFE_MLOCK (re-run with -f)"
+		fi
+	done
+
+	if [ -z "$SKIP_SYS" ]; then
+		for pair in _safe-browser:/run/safe/browser/agent.sock:/var/lib/safe/browser \
+		    _safe-chat:/run/safe/chat/agent.sock:/var/lib/safe/chat; do
+			u=${pair%%:*}
+			rest=${pair#*:}
+			sock=${rest%%:*}
+			store=${rest#*:}
+			sd=$(ls -ld "$store" 2>/dev/null | awk '{ print $1 " " $3 ":" $4 }')
+			case $sd in
+			"drwx------"*" $u:$u") ;;
+			*) bad "$store is '$sd', expected drwx------ $u:$u" ;;
+			esac
+			[ -S "$sock" ] || { bad "$sock missing: is the agent running?"; continue; }
+			pid=$(pgrep -u "$u" -x safe-agent || true)
+			[ -n "$pid" ] || { bad "$u: safe-agent not running"; continue; }
+			lck=$(awk '/^VmLck:/ { print $2 }' "/proc/$pid/status")
+			if [ "${lck:-0}" -gt 0 ]; then
+				say "ok       $u pid $pid, VmLck ${lck} kB"
+			else
+				bad "$u pid $pid: memory is not locked"
+			fi
+		done
+		rg=$(ls -ld /run/safe/browser 2>/dev/null | awk '{ print $4 }')
+		[ "$rg" = safe-tatl ] || say "note     /run/safe/browser has group '$rg', expected safe-tatl"
+	fi
+
+	wlb=$ROOT$PREFIX/sbin/safe-wl-backend
+	if [ -z "$SKIP_SYS" ] && [ -x "$wlb" ] && [ -e "$host" ]; then
+		if out=$(SAFE_FILL_HOST=$host "$wlb" check 2>&1); then
+			say "ok       ${out#ok: }"
+		else
+			bad "clipboard backend: $(printf '%s' "$out" | tr '\n' ' ')"
+		fi
+	fi
+	return "$fail"
+}
+
+step_next() {
+	cat <<EOF
+
+Next steps
+  1. Unlock the agents (each restart or timeout forgets the key):
+
+       sudo $PREFIX/bin/safe-unlock
+
+  2. Check that you are in safe-tatl in this login session:
+
+       id
+
+     If it is missing, log out and in, then start Firefox.
+
+  3. Hardened migration needs a sudoers or doas rule that runs safe
+     as _safe-browser. Example for /etc/sudoers.d/safe:
+
+       Defaults!$PREFIX/bin/safe env_keep += "SAFE_SOCK"
+       %sudo ALL=(_safe-browser) NOPASSWD: $PREFIX/bin/safe
+       %sudo ALL=(ALL) NOPASSWD: $PREFIX/bin/safe-forget-all
+       %sudo ALL=(ALL) NOPASSWD: $PREFIX/bin/safe-unlock
+
+     The doas equivalent is:
+
+       permit persist setenv { SAFE_SOCK } <you> as _safe-browser cmd $PREFIX/bin/safe
+
+     Either rule lets processes running as you decrypt the browser
+     store through the agent without the master password.  Remove it
+     once the migration is done if you do not want that.
+
+     safe-fill-migrate -U execs doas; safe-fill-migrate-hardened
+     falls back to a sudo shim when doas is missing.
+
+  4. Migrate Firefox logins (dry run first):
+
+       P=<profile directory>
+       safe-fill-migrate-hardened -n "\$P"
+       safe-fill-migrate-hardened    "\$P"
+
+     Firefox keeps the original passwords until you run with -b
+     (Firefox closed).
+
+  5. Lock binding (Sway example):
+
+       bindsym \$mod+Escape exec sh -c \\
+           'sudo $PREFIX/bin/safe-forget-all; exec wlock'
+EOF
+}
+
+for s in "$@"; do
+	case $s in
+	users|dirs|services|manifest|doas|restart|verify|next) ;;
+	*) die "unknown step: $s" ;;
+	esac
+done
+rc=0
+for s in "$@"; do
+	say "== $s"
+	"step_$s" || rc=1
+done
+exit "$rc"

@@ -1,0 +1,39 @@
+#!/bin/sh
+# safe-wl-backend [detect|flags|check]
+#   detect  print which wl-copy is installed: rs (wl-clipboard-rs) or c
+#   flags   print the WL_CPPFLAGS value that matches it (empty for rs)
+#   check   verify the installed safe-fill-host was built for that wl-copy
+# A mismatch fails silently: rs host + c wl-copy fails every fill,
+# c host + rs wl-copy loses --sensitive.
+WL=${WL_COPY_PATH:-/usr/bin/wl-copy}
+HOST=${SAFE_FILL_HOST:-/usr/local/libexec/safe-fill-host}
+
+detect() {
+	[ -x "$WL" ] || { echo none; return; }
+	if "$WL" --help 2>&1 | grep -q -e '--sensitive'; then echo rs; else echo c; fi
+}
+built() {
+	# the string exists only in the rs build (the c build has no such argument)
+	if grep -aq -e '--sensitive' "$HOST" 2>/dev/null; then echo rs; else echo c; fi
+}
+
+case ${1:-check} in
+detect) detect ;;
+flags) [ "$(detect)" = c ] && echo -DWL_BACKEND_C || echo ;;
+check)
+	[ -e "$HOST" ] || { echo "no host at $HOST" >&2; exit 2; }
+	d=$(detect); b=$(built)
+	[ "$d" = none ] && { echo "no wl-copy at $WL" >&2; exit 2; }
+	if [ "$d" = "$b" ]; then
+		echo "ok: wl-copy is $d, safe-fill-host is built for $b"
+		exit 0
+	fi
+	echo "MISMATCH: wl-copy is '$d' but safe-fill-host is built for '$b'" >&2
+	if [ "$d" = c ]; then
+		echo "fix: rebuild and reinstall with WL_CPPFLAGS=-DWL_BACKEND_C (config.mk or bmake command line)" >&2
+	else
+		echo "fix: rebuild and reinstall with WL_CPPFLAGS empty (no -DWL_BACKEND_C / -DWL_COPY_NO_SENSITIVE)" >&2
+	fi
+	exit 1 ;;
+*) echo "usage: $0 [detect|flags|check]" >&2; exit 2 ;;
+esac

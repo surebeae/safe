@@ -1,19 +1,22 @@
-.Dd 2020-05-28
+.Dd November 19, 2026
 .Dt SAFE-STORE 5
 .Os POSIX.1-2017
-
 .Sh NAME
 .Nm safe-store
-.Nd Encrypted file storage for your secrets.
-
+.Nd encrypted file storage for your secrets
 .Sh DESCRIPTION
+This is a fork of Willy Goiffon's
+.Xr safe-store 5 ;
+see
+.Xr safe 1
+for a summary of the changes.
+.Pp
 The
 .Nm
 is a directory containing encrypted files called
 .Em secrets .
-There can be any number of sub-directories in the
-.Nm ,
-in which case the secret shall be refered to by its path relative to the
+There can be any number of sub-directories; a secret is referred to by
+its path relative to the
 .Nm .
 .Bd -literal
   $ find .secrets -type f
@@ -22,61 +25,232 @@ in which case the secret shall be refered to by its path relative to the
   .secrets/subdir/name
   .secrets/subdir/othername
 .Ed
-
 .Sh FILES
-.Bl -tag -width "/etc/mail/smtpd.confXXX" -compact
+.Bl -tag -width Ds -compact
 .It Pa .secrets
 Default
 .Nm
-path
+path.
 .It Pa .secrets/cipher
-A arbitrary secret named "cipher"
+An arbitrary secret named "cipher".
 .It Pa .secrets/master
-A special secret used as a reference for derivating a key from the
-master password
+A special secret used as the reference for deriving the key from the
+master password.
+.El
+.Sh FORMAT
+Each secret is the concatenation of a 40-byte CREAM header and a
+secretstream payload produced by
+.Xr crypto_secretstream_xchacha20poly1305 3
+(XChaCha20-Poly1305).
+The key is derived once, with Argon2id, from the master password and
+the salt recorded in the
+.Pa master
+header, and is reused for every secret in the store.
+The salt recorded in a non-master secret's header is a copy of the
+master's salt; it is not used to derive the key.
+.Pp
+The header is laid out as follows:
+.Bl -tag -width Ds -compact
+.It 6 bytes
+Magic
+.Dq CREAM\e1 .
+.It 2 bytes
+Format version, network byte order.
+.It 4 bytes
+Secretstream chunk size, network byte order.
+The only accepted value is 8192; any other value is rejected at
+parse time.
+.It 4 bytes
+Argon2id memory limit in KiB, network byte order.
+.It 4 bytes
+Argon2id time cost, network byte order.
+.It 4 bytes
+Argon2id parallelism, network byte order.  Ignored by libsodium, but
+validated for exact equality with the expected value.
+.It 16 bytes
+Argon2id salt.
 .El
 .Pp
-.Pa secrets
-are the concatenation of a 40 bytes
-.Xr cream 5
-header and arbitrary data encrypted using the
-.Em XChaCha20-Poly1305
-algorithm.
-.Pp
-The key used for encryption is derived from the parameters in the header
-and a master password. Every secret is encrypted with the same key.
-.Pp
-.Pa master
-is a special secret containing the master password.
-It is used to check the master password, and as a reference for key
-derivation.
-Its content is however never checked for, and could be
-anything, as long as it can be decrypted properly.
-
-.Sh SECURITY CONSIDERATIONS
-The master secret is used to verify that the key derivated from your
-master password is correct. If it is not absent, no secret can be
-decrypted, and the
+The header layout and the key-derivation parameters are frozen.
+Readers validate the magic, chunk size and Argon2id parameters for
+exact equality with the values below, and accept the two versions
+below; the salt is read but not validated.
+A file whose header records any other value is rejected at parse time,
+before any decryption is attempted.
+The expected values are:
+.Bl -tag -width Ds -compact
+.It version
+0x12 (written), or 0x11 (read only).
+.It chunk size
+8192.
+.It Argon2id memory
+256 MiB (262144 KiB).
+.It Argon2id time
+3.
+.It Argon2id parallelism
+1.
+.El
+.Sh VERSIONS
+.Bl -tag -width Ds
+.It 0x12
+Written by this version of
 .Xr safe 1
-utility will generate a new header and master entry. It means that all
-secrets created with a different salt will not be decrypted properly.
+and
+.Xr safe-agent 1
+for every new entry, including a new
+.Pa master .
+The associated data of every chunk is the 40-byte header followed by
+the entry's name, so no header field, the version and the salt copy
+included, can be changed without the entry failing to decrypt.
+The final chunk is padded; see
+.Sx PADDING .
+.It 0x11
+The previous format: the associated data is the name alone, and there
+is no padding.
+Entries in this format are still read, and are left as they are; an
+entry becomes 0x12 when it is next written, for example with
+.Nm safe Fl f Fl a .
+.El
 .Pp
-To recover from a lost master secret, you can do the following (assuming that
-.Em random_entry
-is an existing secret):
+A store may hold entries of both versions.
+Programs from before 0x12 reject 0x12 entries, and a store whose
+.Pa master
+is 0x12 (every store created by this version) can not be opened by
+them at all.
+.Sh PADDING
+In format 0x12 only the final chunk is padded.
+Its plaintext, r bytes, is extended with
+.Xr sodium_pad 3
+(a 0x80 byte, then zero bytes, as in ISO/IEC 7816-4) to the smallest
+power of two that is at least 256 and greater than r.
+Since a chunk holds at most 8192 bytes, r is at most 8191: when the
+plaintext ends exactly at a chunk boundary, it is followed by an empty
+final chunk, padded to 256 bytes.
+Every chunk before the final one holds exactly 8192 bytes.
+.Pp
+An entry of n bytes therefore takes
+.Bd -literal -offset indent
+40 + 24 + floor(n / 8192) * (8192 + 17) + b + 17
+.Ed
+.Pp
+bytes on disk, where b is the padded size of the remaining
+n mod 8192 bytes.
+All entries shorter than 256 bytes, which covers practically every
+password, have the same size, 337 bytes.
+Longer entries reveal their length rounded up to a power of two up to
+8 KiB, and above that their length to the nearest 8 KiB.
+.Pp
+Readers remove the padding after the final chunk has been
+authenticated and accept only the padding a writer produces: the
+padded size must be the power of two that the unpadded length calls
+for, and the padding must be exactly 0x80 followed by zero bytes.
+.Pp
+Entry names are not padded or hidden; see
+.Sx SECURITY CONSIDERATIONS .
+.Sh PORTABILITY
+The chunk size recorded in the header is the fixed value 8192,
+independent of the platform where
+.Xr safe 1
+was built.
+Stores are interchangeable across libcs and architectures; a store
+created by a binary built against one libc can be opened by a binary
+built against another.
+.Pp
+Newer versions of safe read every format version listed under
+.Sx VERSIONS ;
+older versions read only the versions they knew.
+.Sh TRUNCATION
+Readers require that the final chunk of the secretstream be tagged
+.Dv TAG_FINAL ,
+that every chunk before it be tagged as an ordinary message, and that
+no bytes follow it.
+This prevents truncation attacks at buffer boundaries and the appending
+of arbitrary data.
+.Sh WRITES ARE ATOMIC
+New secrets, and the master entry, are written to a temporary file in
+the same directory and then atomically renamed into place, followed by
+an
+.Xr fsync 2
+of the file and of the containing directory.
+Without
+.Fl f ,
+the final step uses rename-without-replace
+.Pq Xr renameat2 2 No on Linux, link+unlink elsewhere ,
+so an existing secret is never overwritten.
+.Pp
+A crash mid-write leaves the previous secret, if any, untouched.
+.Sh INDEPENDENT STORES
+Each
+.Nm
+directory has its own
+.Pa master
+entry, its own Argon2id salt, and its own key.
+Two stores on the same machine (for example the default-profile
+.Pa ~/.secrets
+and the hardened
+.Pa /var/lib/safe/browser )
+are cryptographically independent: compromise of one does not
+compromise the other, and losing one master password does not affect
+the other.
+The agents that serve them are separate processes with separate
+retained keys; the agent never returns its key, only decrypted or
+encrypted entries.
+.Sh SECURITY CONSIDERATIONS
+The master secret is used to verify that the key derived from your
+master password is correct.
+Every secret in a store is encrypted under the same key, so the same
+salt and Argon2id parameters; a secret whose header records different
+parameters is rejected.
+.Pp
+Entry names are file names and are not encrypted, and the number of
+entries and their sizes, rounded as described under
+.Sx PADDING ,
+are visible to anyone who can list the store directory.
+Keep the store, and every copy of it, on encrypted storage if that
+matters.
+.Pp
+The bytes in
+.Pa master
+are never interpreted, only decrypted; any secret encrypted with the
+correct master password and with
+.Pa master
+as its authenticated name works.
+.Pp
+To recover from a corrupt master entry, the header (which holds the
+salt) must be intact.
+If the header is also corrupt, copy any decryptable secret over
+.Pa master
+to restore a valid header, then re-encrypt the entry in place:
 .Bd -literal
   cd $SAFE_DIR
   cp random_entry master
-  echo "your master password" | safe -a master.new
-  mv master.new master
   chmod 400 master
-  safe master
+  safe -f -a master < /dev/null
+  password:
 .Ed
-
+.Pp
+The password prompt takes the existing master password; the bytes read
+from stdin become the new master entry's payload and are never
+interpreted, so any content works.
+Do not rename an encrypted file to
+.Pa master
+without re-encrypting it: because the secret name is authenticated as
+AEAD associated data, the rename makes the file undecryptable under
+its new name.
+.Pp
+Do not delete
+.Pa master
+unless the entire store has been backed up and is intended to be
+abandoned.
+The salt in
+.Pa master
+is the only copy used for key derivation; without it no secret can
+be decrypted, and there is no recovery path.
 .Sh SEE ALSO
 .Xr safe 1 ,
-.Xr safe-agent 1 ,
-.Xr cream 5
-
+.Xr safe-agent 1
 .Sh AUTHORS
 .An Willy Goiffon Aq Mt dev@z3bra.org
+.Pp
+Modifications in this fork: see
+.Pa README .
