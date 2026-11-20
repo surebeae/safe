@@ -230,23 +230,23 @@ and groups (_tatl, _safe-browser, _safe-chat, safe-tatl, safe-chat)
 and adds you to safe-tatl; log out and in again so your browser
 inherits the group.
 
-safe-hardened-setup writes systemd units (safe-runtime-setup,
-safe-browser-agent, safe-chat-agent) and their files in
-/etc/default, creates /var/lib/safe/{browser,chat}, writes the
-Firefox native-messaging manifest pointing at the libexec host,
-restarts the agents and checks that their memory is locked and
-that the host matches the installed wl-copy. It does not edit
-doas.conf. A configuration file that differs from what it would
-write is kept and shown as a diff; run it with -f to replace it
-(the old file is copied to /var/backups/safe-hardened first). Use
--u USER when not running it through doas or sudo, -e ID for
-another extension id, and -m BYTES to add LimitMEMLOCK= to the
-agent units.
+safe-hardened-setup writes the services (safe-runtime-setup,
+safe-browser-agent, safe-chat-agent) for systemd, with their files in
+/etc/default, or for dinit, in /etc/dinit.d with .env files. It picks
+the init system itself; -i systemd or -i dinit overrides that. It
+creates /var/lib/safe/{browser,chat}, writes the Firefox
+native-messaging manifest pointing at the libexec host, starts the
+agents and checks that their memory is locked and that the host
+matches the installed wl-copy. It does not edit doas.conf. A
+configuration file that differs from what it would write is kept and
+shown as a diff; run it with -f to replace it (the old file is copied
+to /var/backups/safe-hardened first). Use -u USER when not running it
+through doas or sudo, -e ID for another extension id, and -m BYTES to
+add a memlock limit to the agent services.
 
-It only knows systemd. On another service manager (dinit on
-Chimera, for example) run the users and dirs steps, then create
-the equivalent services by hand: run scripts/safe-runtime-setup
-once at boot, then
+On another service manager, run the users, dirs and manifest steps,
+then create the equivalent services by hand: run
+scripts/safe-runtime-setup once at boot, then
 
 	safe-agent -d -s /var/lib/safe/browser \
 	    -f /run/safe/browser/agent.sock -t 900 \
@@ -255,8 +255,6 @@ once at boot, then
 	    -f /run/safe/chat/agent.sock -t 0 -p chat/ -g
 	                                    (as _safe-chat, with
 	                                     SAFE_UNSAFE_TIMEOUT=1)
-
-and run the manifest step.
 
 The chat agent serves a second, independent store for clients
 outside this tree. It runs with -t 0 and SAFE_UNSAFE_TIMEOUT=1, so

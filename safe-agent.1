@@ -532,11 +532,10 @@ if locking fails, the agent exits unless
 .Ev SAFE_UNSAFE_MLOCK
 is set.
 .Ic safe-hardened-setup
-writes systemd units; pass it
+writes systemd or dinit services; pass it
 .Fl m Ar bytes
-to add a
-.Ql LimitMEMLOCK=
-line if the service manager's default limit is too low.
+to add a memlock limit to them if the service manager's default
+limit is too low.
 The derived key and the two secretstream buffers are all
 .Nm mlock Ns 'd .
 .Pp
